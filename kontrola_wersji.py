@@ -654,8 +654,8 @@ def draw_confirm_dialog():
     spacing = 50
     
     # TAK
-    yes_x = SCREEN_WIDTH // 2 - button_w - spacing // 2
-    if confirm_selection == 0:
+    yes_x = SCREEN_WIDTH // 2 + spacing // 2
+    if confirm_selection == 1:
         pygame.draw.rect(screen, GREEN, (yes_x, button_y, button_w, button_h), border_radius=15)
         pygame.draw.rect(screen, YELLOW, (yes_x, button_y, button_w, button_h), 6, border_radius=15)
     else:
@@ -665,8 +665,8 @@ def draw_confirm_dialog():
     draw_text("✓ TAK", font_large, WHITE, yes_x + button_w // 2, button_y + button_h // 2, center=True)
     
     # NIE
-    no_x = SCREEN_WIDTH // 2 + spacing // 2
-    if confirm_selection == 1:
+    no_x = SCREEN_WIDTH // 2 - button_w - spacing // 2
+    if confirm_selection == 0:
         pygame.draw.rect(screen, RED, (no_x, button_y, button_w, button_h), border_radius=15)
         pygame.draw.rect(screen, YELLOW, (no_x, button_y, button_w, button_h), 6, border_radius=15)
     else:
@@ -718,7 +718,7 @@ def handle_ok():
         toggle_pause()
     
     elif current_state == STATE_CONFIRM:
-        if confirm_selection == 0:
+        if confirm_selection == 1:
             # Usuń
             if videos and 0 <= selected_index < len(videos):
                 video = videos[selected_index]
