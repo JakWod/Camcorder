@@ -13,6 +13,8 @@ from gpiozero import Button
 import signal
 import subprocess
 import time
+import json
+from PIL import Image, ImageDraw, ImageFont
 
 # ============================================================================
 # KONFIGURACJA
@@ -22,6 +24,7 @@ VIDEO_DIR = Path("/home/pi/camera_project")
 VIDEO_DIR.mkdir(exist_ok=True)
 THUMBNAIL_DIR = VIDEO_DIR / "thumbnails"
 THUMBNAIL_DIR.mkdir(exist_ok=True)
+CONFIG_FILE = VIDEO_DIR / "camera_config.json"
 
 # GPIO Pins
 PIN_RECORD = 17
@@ -32,6 +35,9 @@ PIN_UP = 5
 PIN_DOWN = 6
 PIN_LEFT = 13
 PIN_RIGHT = 19
+PIN_MENU = 27
+PIN_PLUS = 9
+PIN_MINUS = 11
 
 # Kolory
 BLACK = (0, 0, 0)
@@ -43,12 +49,14 @@ GRAY = (128, 128, 128)
 DARK_GRAY = (64, 64, 64)
 YELLOW = (255, 255, 0)
 ORANGE = (255, 165, 0)
+LIGHT_BLUE = (173, 216, 230)
 
 # Stany
 STATE_MAIN = 0
 STATE_VIDEOS = 1
 STATE_CONFIRM = 2
 STATE_PLAYING = 3
+STATE_MENU = 4
 
 # Globalne zmienne
 camera = None
@@ -68,7 +76,7 @@ video_total_frames = 0
 video_fps = 30
 video_path_playing = None
 video_last_frame_time = 0
-video_last_surface = None  # Przechowuj ostatnią klatkę
+video_last_surface = None
 
 # Video Manager
 videos = []
@@ -82,6 +90,517 @@ font_small = None
 font_tiny = None
 SCREEN_WIDTH = 0
 SCREEN_HEIGHT = 0
+
+# Menu System
+menu_items = []
+menu_selected = 0
+menu_editing = False
+menu_edit_value = ""
+last_menu_scroll = 0
+
+# Camera Settings
+camera_settings = {
+    "white_balance": "auto",
+    "brightness": 0.0,
+    "contrast": 1.0,
+    "saturation": 1.0,
+    "sharpness": 1.0,
+    "exposure_compensation": 0.0,
+    "zoom": 0.0,
+    "show_date": False,
+    "show_time": False,  # Nowa opcja - czy pokazywać godzinę
+    "date_position": "top_left",
+    "manual_date": None,
+    "awb_mode": "auto"
+}
+
+# White Balance opcje
+WB_MODES = ["auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy"]
+DATE_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"]
+
+# Zoom continuous
+last_zoom_time = 0
+ZOOM_STEP = 0.02  # Mniejszy krok dla płynnego zoomu
+
+
+# ============================================================================
+# FUNKCJE KONFIGURACJI
+# ============================================================================
+
+def load_config():
+    """Wczytaj konfigurację z pliku"""
+    global camera_settings
+    try:
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, 'r') as f:
+                loaded = json.load(f)
+                camera_settings.update(loaded)
+            print("✅ Konfiguracja wczytana")
+        else:
+            save_config()
+    except Exception as e:
+        print(f"⚠️  Błąd wczytywania config: {e}")
+
+
+def save_config():
+    """Zapisz konfigurację do pliku"""
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(camera_settings, f, indent=2)
+        print("✅ Konfiguracja zapisana")
+    except Exception as e:
+        print(f"⚠️  Błąd zapisu config: {e}")
+
+
+def reset_to_factory():
+    """Reset do ustawień fabrycznych"""
+    global camera_settings
+    camera_settings = {
+        "white_balance": "auto",
+        "brightness": 0.0,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "sharpness": 1.0,
+        "exposure_compensation": 0.0,
+        "zoom": 0.0,
+        "show_date": False,
+        "show_time": False,
+        "date_position": "top_left",
+        "manual_date": None,
+        "awb_mode": "auto"
+    }
+    save_config()
+    apply_camera_settings()
+    print("✅ Reset do ustawień fabrycznych")
+
+
+def apply_camera_settings():
+    """Zastosuj ustawienia do kamery"""
+    if not camera:
+        return
+    
+    try:
+        controls = {}
+        
+        if "brightness" in camera_settings:
+            controls["Brightness"] = camera_settings["brightness"]
+        
+        if "contrast" in camera_settings:
+            controls["Contrast"] = camera_settings["contrast"]
+        
+        if "saturation" in camera_settings:
+            controls["Saturation"] = camera_settings["saturation"]
+        
+        if "sharpness" in camera_settings:
+            controls["Sharpness"] = camera_settings["sharpness"]
+        
+        if "exposure_compensation" in camera_settings:
+            controls["ExposureValue"] = camera_settings["exposure_compensation"]
+        
+        if "awb_mode" in camera_settings:
+            mode = camera_settings["awb_mode"]
+            if mode == "auto":
+                controls["AwbEnable"] = True
+            else:
+                controls["AwbEnable"] = False
+        
+        if "zoom" in camera_settings:
+            apply_zoom(camera_settings["zoom"])
+        
+        camera.set_controls(controls)
+        print(f"✅ Ustawienia kamery zastosowane: {controls}")
+        
+    except Exception as e:
+        print(f"⚠️  Błąd ustawiania kamery: {e}")
+
+
+def apply_zoom(zoom_level):
+    """Zastosuj cyfrowy zoom (0.0 = brak, 1.0 = max)"""
+    if not camera:
+        return
+    
+    try:
+        sensor_size = camera.camera_properties['PixelArraySize']
+        width, height = sensor_size
+        
+        max_zoom_factor = 4.0
+        zoom_factor = 1.0 + (zoom_level * (max_zoom_factor - 1.0))
+        
+        crop_width = int(width / zoom_factor)
+        crop_height = int(height / zoom_factor)
+        
+        x = (width - crop_width) // 2
+        y = (height - crop_height) // 2
+        
+        camera.set_controls({"ScalerCrop": (x, y, crop_width, crop_height)})
+        
+    except Exception as e:
+        print(f"⚠️  Błąd zoom: {e}")
+
+
+def adjust_zoom(delta):
+    """Zmień zoom o delta"""
+    global camera_settings
+    
+    new_zoom = camera_settings["zoom"] + delta
+    new_zoom = max(0.0, min(1.0, new_zoom))
+    
+    camera_settings["zoom"] = new_zoom
+    apply_zoom(new_zoom)
+    # Nie zapisujemy co zmianę, tylko przy zamknięciu menu
+
+
+def apply_date_overlay(request):
+    """Callback do rysowania daty na klatkach podczas nagrywania"""
+    if not camera_settings.get("show_date", False):
+        return
+    
+    try:
+        # Pobierz obraz z requestu
+        with request.make_array("main") as array:
+            # Konwersja do PIL Image
+            img = Image.fromarray(array)
+            draw = ImageDraw.Draw(img)
+            
+            # Pobierz datę
+            if camera_settings.get("manual_date"):
+                date_text = camera_settings["manual_date"]
+            else:
+                if camera_settings.get("show_time", False):
+                    date_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    date_text = datetime.now().strftime("%Y-%m-%d")
+            
+            # Czcionka - użyj domyślnej PIL font
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+            except:
+                font = ImageFont.load_default()
+            
+            # Pozycja
+            position = camera_settings.get("date_position", "top_left")
+            margin = 30
+            
+            # Oblicz rozmiar tekstu
+            bbox = draw.textbbox((0, 0), date_text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            if position == "top_left":
+                x, y = margin, margin
+            elif position == "top_right":
+                x, y = 1920 - text_width - margin, margin
+            elif position == "bottom_left":
+                x, y = margin, 1080 - text_height - margin
+            elif position == "bottom_right":
+                x, y = 1920 - text_width - margin, 1080 - text_height - margin
+            else:
+                x, y = margin, margin
+            
+            # Rysuj obrys (czarny)
+            outline_width = 3
+            for dx in range(-outline_width, outline_width + 1):
+                for dy in range(-outline_width, outline_width + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text((x + dx, y + dy), date_text, font=font, fill=(0, 0, 0))
+            
+            # Rysuj tekst (żółty)
+            draw.text((x, y), date_text, font=font, fill=(255, 255, 0))
+            
+            # Skopiuj z powrotem do array
+            array[:] = np.array(img)
+    
+    except Exception as e:
+        print(f"⚠️  Błąd overlay daty: {e}")
+
+
+# ============================================================================
+# MENU SYSTEM
+# ============================================================================
+
+def init_menu():
+    """Inicjalizuj strukturę menu"""
+    global menu_items, menu_selected
+    
+    menu_items = [
+        {"type": "header", "text": "⚙️  USTAWIENIA KAMERY"},
+        {"type": "spacer"},
+        
+        {"type": "select", "label": "White Balance", "key": "awb_mode", "options": WB_MODES},
+        {"type": "slider", "label": "Jasność", "key": "brightness", "min": -1.0, "max": 1.0, "step": 0.1},
+        {"type": "slider", "label": "Kontrast", "key": "contrast", "min": 0.0, "max": 2.0, "step": 0.1},
+        {"type": "slider", "label": "Saturacja", "key": "saturation", "min": 0.0, "max": 2.0, "step": 0.1},
+        {"type": "slider", "label": "Ostrość", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
+        {"type": "slider", "label": "Ekspozycja", "key": "exposure_compensation", "min": -2.0, "max": 2.0, "step": 0.2},
+        
+        {"type": "spacer"},
+        {"type": "header", "text": "📅 ZNACZNIK DATY"},
+        {"type": "spacer"},
+        
+        {"type": "toggle", "label": "Pokaż datę", "key": "show_date"},
+        {"type": "toggle", "label": "Pokaż godzinę", "key": "show_time"},
+        {"type": "select", "label": "Pozycja daty", "key": "date_position", "options": DATE_POSITIONS},
+        {"type": "text", "label": "Ręczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
+        
+        {"type": "spacer"},
+        {"type": "button", "label": "🔄 RESET DO FABRYCZNYCH", "action": "reset"},
+        {"type": "button", "label": "💾 ZAPISZ I WYJDŹ", "action": "save_exit"},
+    ]
+    
+    menu_selected = 2
+
+
+def open_menu():
+    """Otwórz menu ustawień"""
+    global current_state, menu_selected, menu_editing
+    
+    init_menu()
+    menu_selected = 2
+    menu_editing = False
+    current_state = STATE_MENU
+    print("\n⚙️  MENU OTWARTE")
+
+
+def close_menu(save=True):
+    """Zamknij menu"""
+    global current_state, menu_editing
+    
+    if save:
+        save_config()
+        apply_camera_settings()
+    
+    menu_editing = False
+    current_state = STATE_MAIN
+    print("\n📺 Ekran główny")
+
+
+def menu_navigate_up():
+    """Nawigacja w górę w menu"""
+    global menu_selected
+    
+    if menu_editing:
+        item = menu_items[menu_selected]
+        if item["type"] == "slider":
+            key = item["key"]
+            camera_settings[key] = min(item["max"], camera_settings[key] + item["step"])
+            apply_camera_settings()
+        elif item["type"] == "select":
+            key = item["key"]
+            options = item["options"]
+            current_idx = options.index(camera_settings[key]) if camera_settings[key] in options else 0
+            new_idx = (current_idx + 1) % len(options)
+            camera_settings[key] = options[new_idx]
+            apply_camera_settings()
+    else:
+        menu_selected = max(0, menu_selected - 1)
+        while menu_selected > 0 and menu_items[menu_selected]["type"] in ["spacer", "header"]:
+            menu_selected -= 1
+
+
+def menu_navigate_down():
+    """Nawigacja w dół w menu"""
+    global menu_selected
+    
+    if menu_editing:
+        item = menu_items[menu_selected]
+        if item["type"] == "slider":
+            key = item["key"]
+            camera_settings[key] = max(item["min"], camera_settings[key] - item["step"])
+            apply_camera_settings()
+        elif item["type"] == "select":
+            key = item["key"]
+            options = item["options"]
+            current_idx = options.index(camera_settings[key]) if camera_settings[key] in options else 0
+            new_idx = (current_idx - 1) % len(options)
+            camera_settings[key] = options[new_idx]
+            apply_camera_settings()
+    else:
+        menu_selected = min(len(menu_items) - 1, menu_selected + 1)
+        while menu_selected < len(menu_items) - 1 and menu_items[menu_selected]["type"] in ["spacer", "header"]:
+            menu_selected += 1
+
+
+def menu_ok():
+    """Akcja OK w menu"""
+    global menu_editing, menu_edit_value
+    
+    item = menu_items[menu_selected]
+    
+    if item["type"] == "button":
+        if item["action"] == "reset":
+            reset_to_factory()
+        elif item["action"] == "save_exit":
+            close_menu(save=True)
+    
+    elif item["type"] == "toggle":
+        key = item["key"]
+        camera_settings[key] = not camera_settings[key]
+        apply_camera_settings()
+    
+    elif item["type"] in ["slider", "select"]:
+        menu_editing = not menu_editing
+    
+    elif item["type"] == "text":
+        if not menu_editing:
+            menu_editing = True
+            key = item["key"]
+            menu_edit_value = camera_settings[key] if camera_settings[key] else ""
+        else:
+            key = item["key"]
+            camera_settings[key] = menu_edit_value if menu_edit_value else None
+            menu_editing = False
+            menu_edit_value = ""
+
+
+def draw_menu_screen(frame):
+    """Rysuj ekran menu z podglądem kamery w tle"""
+    if frame is not None:
+        try:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_resized = cv2.resize(frame_rgb, (SCREEN_WIDTH, SCREEN_HEIGHT))
+            frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
+            screen.blit(frame_surface, (0, 0))
+        except:
+            screen.fill(BLACK)
+    else:
+        screen.fill(BLACK)
+    
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    overlay.set_alpha(220)
+    overlay.fill(BLACK)
+    screen.blit(overlay, (0, 0))
+    
+    menu_width = 1000
+    menu_height = SCREEN_HEIGHT - 100
+    menu_x = (SCREEN_WIDTH - menu_width) // 2
+    menu_y = 50
+    
+    pygame.draw.rect(screen, DARK_GRAY, (menu_x, menu_y, menu_width, menu_height), border_radius=20)
+    pygame.draw.rect(screen, BLUE, (menu_x, menu_y, menu_width, menu_height), 4, border_radius=20)
+    
+    item_height = 60
+    visible_items = (menu_height - 100) // item_height
+    scroll_offset = max(0, menu_selected - visible_items // 2)
+    
+    y = menu_y + 30
+    
+    for i, item in enumerate(menu_items[scroll_offset:scroll_offset + visible_items + 2]):
+        actual_idx = i + scroll_offset
+        
+        if item["type"] == "header":
+            draw_text(item["text"], font_medium, YELLOW, menu_x + menu_width // 2, y, center=True)
+            y += 50
+        
+        elif item["type"] == "spacer":
+            y += 20
+        
+        elif item["type"] == "slider":
+            is_selected = (actual_idx == menu_selected)
+            
+            if is_selected:
+                pygame.draw.rect(screen, BLUE if not menu_editing else ORANGE, 
+                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
+            
+            label_color = YELLOW if is_selected else WHITE
+            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 10)
+            
+            value = camera_settings[item["key"]]
+            value_text = f"{value:.1f}"
+            draw_text(value_text, font_small, GREEN if is_selected else GRAY, menu_x + menu_width - 250, y + 10)
+            
+            bar_x = menu_x + menu_width - 200
+            bar_y = y + 20
+            bar_width = 150
+            bar_height = 10
+            
+            pygame.draw.rect(screen, GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
+            
+            fill_ratio = (value - item["min"]) / (item["max"] - item["min"])
+            fill_width = int(bar_width * fill_ratio)
+            pygame.draw.rect(screen, GREEN, (bar_x, bar_y, fill_width, bar_height), border_radius=5)
+            
+            y += item_height
+        
+        elif item["type"] == "select":
+            is_selected = (actual_idx == menu_selected)
+            
+            if is_selected:
+                pygame.draw.rect(screen, BLUE if not menu_editing else ORANGE, 
+                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
+            
+            label_color = YELLOW if is_selected else WHITE
+            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 15)
+            
+            value = camera_settings[item["key"]]
+            value_color = GREEN if is_selected else GRAY
+            draw_text(f"< {value} >", font_small, value_color, menu_x + menu_width - 250, y + 15)
+            
+            y += item_height
+        
+        elif item["type"] == "toggle":
+            is_selected = (actual_idx == menu_selected)
+            
+            if is_selected:
+                pygame.draw.rect(screen, BLUE, 
+                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
+            
+            label_color = YELLOW if is_selected else WHITE
+            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 15)
+            
+            value = camera_settings[item["key"]]
+            toggle_text = "✓ TAK" if value else "✗ NIE"
+            toggle_color = GREEN if value else RED
+            draw_text(toggle_text, font_small, toggle_color, menu_x + menu_width - 200, y + 15)
+            
+            y += item_height
+        
+        elif item["type"] == "text":
+            is_selected = (actual_idx == menu_selected)
+            
+            if is_selected:
+                pygame.draw.rect(screen, BLUE if not menu_editing else ORANGE, 
+                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
+            
+            label_color = YELLOW if is_selected else WHITE
+            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 15)
+            
+            if menu_editing and is_selected:
+                value_text = menu_edit_value + "_"
+            else:
+                value = camera_settings[item["key"]]
+                value_text = value if value else item.get("placeholder", "---")
+            
+            value_color = GREEN if is_selected else GRAY
+            draw_text(value_text, font_tiny, value_color, menu_x + menu_width - 400, y + 15)
+            
+            y += item_height
+        
+        elif item["type"] == "button":
+            is_selected = (actual_idx == menu_selected)
+            
+            button_color = RED if "RESET" in item["label"] else GREEN
+            
+            if is_selected:
+                pygame.draw.rect(screen, button_color, 
+                               (menu_x + 100, y - 5, menu_width - 200, item_height - 10), border_radius=15)
+                pygame.draw.rect(screen, YELLOW, 
+                               (menu_x + 100, y - 5, menu_width - 200, item_height - 10), 5, border_radius=15)
+            else:
+                pygame.draw.rect(screen, button_color, 
+                               (menu_x + 100, y - 5, menu_width - 200, item_height - 10), border_radius=15)
+            
+            draw_text(item["label"], font_medium, WHITE, menu_x + menu_width // 2, y + 20, center=True)
+            
+            y += item_height + 10
+    
+    if menu_editing:
+        instructions = "⬆️⬇️ : Zmień | OK: Zatwierdź | MENU: Anuluj"
+    else:
+        instructions = "⬆️⬇️ : Nawigacja | OK: Wybierz | MENU: Zamknij"
+    
+    draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, 
+             center=True, bg_color=BLACK, padding=10)
 
 
 # ============================================================================
@@ -116,13 +635,11 @@ def refresh_videos():
     
     videos = sorted(VIDEO_DIR.glob("*.mp4"), reverse=True)
     
-    # Zachowaj focus
     if old_selected and old_selected in videos:
         selected_index = videos.index(old_selected)
     else:
         selected_index = min(selected_index, max(0, len(videos) - 1))
     
-    # Załaduj miniatury
     print("🖼️  Ładowanie miniatur...")
     thumbnails = {}
     for video in videos:
@@ -155,6 +672,72 @@ def draw_text(text, font, color, x, y, center=False, bg_color=None, padding=10):
         screen.blit(text_surface, text_rect)
     except:
         pass
+
+
+def draw_text_with_outline(text, font, color, outline_color, x, y, center=False):
+    """Rysuj tekst z obrysem"""
+    if not text or not font:
+        return
+    try:
+        outline_width = 2
+        for dx in range(-outline_width, outline_width + 1):
+            for dy in range(-outline_width, outline_width + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                outline_surface = font.render(str(text), True, outline_color)
+                if center:
+                    outline_rect = outline_surface.get_rect(center=(x + dx, y + dy))
+                else:
+                    outline_rect = outline_surface.get_rect(topleft=(x + dx, y + dy))
+                screen.blit(outline_surface, outline_rect)
+        
+        text_surface = font.render(str(text), True, color)
+        if center:
+            text_rect = text_surface.get_rect(center=(x, y))
+        else:
+            text_rect = text_surface.get_rect(topleft=(x, y))
+        screen.blit(text_surface, text_rect)
+    except:
+        pass
+
+
+def get_display_date():
+    """Pobierz datę do wyświetlenia"""
+    if camera_settings.get("manual_date"):
+        return camera_settings["manual_date"]
+    else:
+        if camera_settings.get("show_time", False):
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            return datetime.now().strftime("%Y-%m-%d")
+
+
+def draw_date_overlay():
+    """Rysuj overlay daty na ekranie (tylko podgląd, nie na nagraniu)"""
+    if not camera_settings.get("show_date", False):
+        return
+    
+    date_text = get_display_date()
+    position = camera_settings.get("date_position", "top_left")
+    
+    margin = 20
+    
+    if position == "top_left":
+        x, y = margin, margin
+    elif position == "top_right":
+        x, y = SCREEN_WIDTH - margin, margin
+        temp_surface = font_small.render(date_text, True, YELLOW)
+        x -= temp_surface.get_width()
+    elif position == "bottom_left":
+        x, y = margin, SCREEN_HEIGHT - margin - 30
+    elif position == "bottom_right":
+        x, y = SCREEN_WIDTH - margin, SCREEN_HEIGHT - margin - 30
+        temp_surface = font_small.render(date_text, True, YELLOW)
+        x -= temp_surface.get_width()
+    else:
+        x, y = margin, margin
+    
+    draw_text_with_outline(date_text, font_small, YELLOW, BLACK, x, y)
 
 
 def format_time(seconds):
@@ -204,7 +787,15 @@ def init_camera():
         controls={"FrameRate": 30}
     )
     camera.configure(config)
+    
+    # Ustaw callback dla overlay daty podczas nagrywania
+    camera.pre_callback = apply_date_overlay
+    
     camera.start()
+    
+    load_config()
+    apply_camera_settings()
+    
     print("✅ Kamera OK")
 
 
@@ -269,7 +860,7 @@ def start_video_playback(video_path):
     video_paused = False
     video_path_playing = video_path
     video_last_frame_time = time.time()
-    video_last_surface = None  # Reset ostatniej klatki
+    video_last_surface = None
     
     current_state = STATE_PLAYING
     print(f"✅ Wideo gotowe: {video_total_frames} klatek @ {video_fps:.1f} FPS")
@@ -298,8 +889,9 @@ def toggle_pause():
         video_last_frame_time = time.time()
     print(f"{'⏸️  Pauza' if video_paused else '▶️  Wznowiono'}")
 
-#wodyk
+
 def seek_video(seconds):
+    """Przewiń wideo o podaną liczbę sekund"""
     global video_current_frame, video_capture, video_last_frame_time
     global video_path_playing, video_last_surface, video_paused
 
@@ -316,17 +908,14 @@ def seek_video(seconds):
     was_paused = video_paused
 
     try:
-        # --- KLUCZ: używamy seek zamiast resetowania pliku ---
         video_capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
 
         ret, frame = video_capture.read()
         if not ret or frame is None:
             return
 
-        # zapamiętaj nową pozycję
         video_current_frame = target_frame + 1
 
-        # konwersja na surface
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         h, w = frame.shape[:2]
@@ -349,24 +938,8 @@ def seek_video(seconds):
         video_paused = was_paused
 
     except Exception as e:
-        print("seek error:", e)
-        video_paused = was_paused
-
-        
-    except Exception as e:
         print(f"❌ Błąd seek: {e}")
         video_paused = was_paused
-        
-    except subprocess.TimeoutExpired:
-        print("❌ FFmpeg timeout")
-        video_paused = was_paused
-        stop_video_playback()
-    except Exception as e:
-        print(f"❌ Błąd przewijania: {e}")
-        import traceback
-        traceback.print_exc()
-        video_paused = was_paused
-        stop_video_playback()
 
 
 # ============================================================================
@@ -385,6 +958,15 @@ def draw_main_screen(frame):
             screen.blit(frame_surface, (0, 0))
         except:
             draw_text("📹 Kamera", font_large, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
+    
+    # Overlay daty (tylko podgląd - na nagraniu jest przez callback)
+    draw_date_overlay()
+    
+    # Wskaźnik zoomu
+    if camera_settings.get("zoom", 0.0) > 0.0:
+        zoom_percent = int(camera_settings["zoom"] * 100)
+        draw_text(f"🔍 {zoom_percent}%", font_small, YELLOW, SCREEN_WIDTH - 150, 20, 
+                 bg_color=BLACK, padding=8)
     
     # Panel statusu
     panel_height = 120
@@ -411,7 +993,8 @@ def draw_main_screen(frame):
         draw_text("Naciśnij Record", font_small, GRAY, SCREEN_WIDTH // 2, panel_y + 30, center=True)
     
     draw_text(status_text, font_large, status_color, SCREEN_WIDTH // 2, panel_y + 70, center=True)
-    draw_text("Record: START/STOP | Videos: Menu", font_tiny, WHITE, SCREEN_WIDTH // 2, 30, center=True, bg_color=BLACK, padding=8)
+    draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom", 
+             font_tiny, WHITE, SCREEN_WIDTH // 2, 30, center=True, bg_color=BLACK, padding=8)
 
 
 def draw_videos_screen():
@@ -447,7 +1030,6 @@ def draw_videos_screen():
                 name_color = WHITE
                 info_color = GRAY
             
-            # Miniatura
             thumb_x, thumb_y = 50, y_offset + 10
             
             if video.stem in thumbnails:
@@ -463,7 +1045,6 @@ def draw_videos_screen():
             pygame.draw.rect(screen, WHITE if i == selected_index else DARK_GRAY, 
                            (thumb_x, thumb_y, 320, 180), 3, border_radius=5)
             
-            # Info
             info_x = thumb_x + 340
             
             draw_text(f"#{i + 1}", font_small, info_color, info_x, y_offset + 10)
@@ -498,7 +1079,6 @@ def draw_videos_screen():
             pos_text = f"{selected_index + 1}/{len(videos)}"
             draw_text(pos_text, font_small, WHITE, SCREEN_WIDTH - 150, header_height + 30, center=True, bg_color=BLUE, padding=10)
     
-    # Panel
     panel_height = 80
     panel_y = SCREEN_HEIGHT - panel_height
     pygame.draw.rect(screen, DARK_GRAY, (0, panel_y, SCREEN_WIDTH, panel_height))
@@ -516,8 +1096,6 @@ def draw_playing_screen():
         draw_text("❌ Błąd odtwarzania", font_large, RED, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
         return
     
-    # Odtwórz kolejną klatkę (jeśli nie pauza)
-    frame_updated = False
     if not video_paused:
         current_time = time.time()
         frame_interval = 1.0 / video_fps
@@ -526,11 +1104,9 @@ def draw_playing_screen():
             ret, frame = video_capture.read()
             
             if ret and frame is not None:
-                # Wyświetl klatkę
                 try:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     
-                    # Zachowaj proporcje
                     video_h, video_w = frame.shape[:2]
                     aspect = video_w / video_h
                     screen_aspect = SCREEN_WIDTH / SCREEN_HEIGHT
@@ -545,9 +1121,7 @@ def draw_playing_screen():
                     frame_resized = cv2.resize(frame_rgb, (new_w, new_h))
                     frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
                     
-                    # Zapisz powierzchnię i offset dla późniejszego użycia
                     video_last_surface = (frame_surface, new_w, new_h)
-                    frame_updated = True
                     
                 except Exception as e:
                     print(f"⚠️  Błąd rysowania klatki: {e}")
@@ -555,11 +1129,9 @@ def draw_playing_screen():
                 video_current_frame += 1
                 video_last_frame_time = current_time
             else:
-                # Koniec wideo
                 stop_video_playback()
                 return
     
-    # Wyświetl ostatnią klatkę (nową lub z cache)
     screen.fill(BLACK)
     if video_last_surface:
         try:
@@ -570,7 +1142,6 @@ def draw_playing_screen():
         except:
             pass
     
-    # Panel kontrolny na dole
     panel_height = 150
     panel_y = SCREEN_HEIGHT - panel_height
     
@@ -579,46 +1150,38 @@ def draw_playing_screen():
     panel.fill(BLACK)
     screen.blit(panel, (0, panel_y))
     
-    # Nazwa pliku
     if video_path_playing:
         name = video_path_playing.name
         if len(name) > 50:
             name = name[:47] + "..."
         draw_text(name, font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 20, center=True)
     
-    # Pasek postępu
     progress_y = panel_y + 60
     progress_width = SCREEN_WIDTH - 100
     progress_x = 50
     progress_height = 15
     
-    # Tło paska
     pygame.draw.rect(screen, DARK_GRAY, (progress_x, progress_y, progress_width, progress_height), border_radius=8)
     
-    # Postęp
     if video_total_frames > 0:
         progress_ratio = video_current_frame / video_total_frames
         filled_width = int(progress_width * progress_ratio)
         if filled_width > 0:
             pygame.draw.rect(screen, BLUE, (progress_x, progress_y, filled_width, progress_height), border_radius=8)
     
-    # Obramowanie
     pygame.draw.rect(screen, WHITE, (progress_x, progress_y, progress_width, progress_height), 2, border_radius=8)
     
-    # Czasy
     current_time_sec = video_current_frame / video_fps if video_fps > 0 else 0
     total_time_sec = video_total_frames / video_fps if video_fps > 0 else 0
     
     time_text = f"{format_time(current_time_sec)} / {format_time(total_time_sec)}"
     draw_text(time_text, font_small, WHITE, SCREEN_WIDTH // 2, progress_y + 35, center=True)
     
-    # Status (pauza/odtwarzanie)
     status_text = "⏸️  PAUZA" if video_paused else "▶️  ODTWARZANIE"
     status_color = ORANGE if video_paused else GREEN
     draw_text(status_text, font_medium, status_color, SCREEN_WIDTH // 2, panel_y + 105, center=True)
     
-    # Instrukcje
-    instructions = "OK: Pauza | ⬅️ ➡️ : ±5s | Videos: Wyjdź"
+    instructions = "OK: Pauza | ⬅️ ➡️ : Przewiń | Videos: Wyjdź"
     draw_text(instructions, font_tiny, GRAY, SCREEN_WIDTH // 2, 30, center=True, bg_color=BLACK, padding=8)
 
 
@@ -653,7 +1216,6 @@ def draw_confirm_dialog():
     button_h = 80
     spacing = 50
     
-    # TAK
     yes_x = SCREEN_WIDTH // 2 + spacing // 2
     if confirm_selection == 1:
         pygame.draw.rect(screen, GREEN, (yes_x, button_y, button_w, button_h), border_radius=15)
@@ -664,7 +1226,6 @@ def draw_confirm_dialog():
     
     draw_text("✓ TAK", font_large, WHITE, yes_x + button_w // 2, button_y + button_h // 2, center=True)
     
-    # NIE
     no_x = SCREEN_WIDTH // 2 - button_w - spacing // 2
     if confirm_selection == 0:
         pygame.draw.rect(screen, RED, (no_x, button_y, button_w, button_h), border_radius=15)
@@ -700,10 +1261,17 @@ def handle_videos():
         current_state = STATE_MAIN
         print("\n📺 Ekran główny")
     elif current_state == STATE_PLAYING:
-        # Wyjdź z odtwarzania
         stop_video_playback()
     elif current_state == STATE_CONFIRM:
         current_state = STATE_VIDEOS
+
+
+def handle_menu():
+    global current_state
+    if current_state == STATE_MAIN and not recording:
+        open_menu()
+    elif current_state == STATE_MENU:
+        close_menu(save=False)
 
 
 def handle_ok():
@@ -714,12 +1282,10 @@ def handle_ok():
             start_video_playback(videos[selected_index])
     
     elif current_state == STATE_PLAYING:
-        # Przełącz pauzę
         toggle_pause()
     
     elif current_state == STATE_CONFIRM:
         if confirm_selection == 1:
-            # Usuń
             if videos and 0 <= selected_index < len(videos):
                 video = videos[selected_index]
                 video.unlink()
@@ -730,6 +1296,9 @@ def handle_ok():
                 refresh_videos()
         current_state = STATE_VIDEOS
         confirm_selection = 0
+    
+    elif current_state == STATE_MENU:
+        menu_ok()
 
 
 def handle_delete():
@@ -744,8 +1313,9 @@ def handle_up():
     if current_state == STATE_VIDEOS and videos:
         selected_index = max(0, selected_index - 1)
     elif current_state == STATE_PLAYING:
-        # TODO: Zwiększ głośność
         print("🔊 Głośność UP (TBD)")
+    elif current_state == STATE_MENU:
+        menu_navigate_up()
 
 
 def handle_down():
@@ -753,8 +1323,9 @@ def handle_down():
     if current_state == STATE_VIDEOS and videos:
         selected_index = min(len(videos) - 1, selected_index + 1)
     elif current_state == STATE_PLAYING:
-        # TODO: Zmniejsz głośność
         print("🔉 Głośność DOWN (TBD)")
+    elif current_state == STATE_MENU:
+        menu_navigate_down()
 
 
 def handle_left():
@@ -767,6 +1338,18 @@ def handle_right():
     global confirm_selection
     if current_state == STATE_CONFIRM:
         confirm_selection = 1
+
+
+def handle_zoom_in():
+    """Zwiększ zoom (+)"""
+    if current_state == STATE_MAIN:
+        adjust_zoom(ZOOM_STEP)
+
+
+def handle_zoom_out():
+    """Zmniejsz zoom (-)"""
+    if current_state == STATE_MAIN:
+        adjust_zoom(-ZOOM_STEP)
 
 
 def cleanup(signum=None, frame=None):
@@ -786,6 +1369,10 @@ def cleanup(signum=None, frame=None):
             camera.close()
         except:
             pass
+    
+    # Zapisz zoom przy zamknięciu
+    save_config()
+    
     try:
         pygame.quit()
     except:
@@ -812,6 +1399,9 @@ if __name__ == '__main__':
     btn_down = Button(PIN_DOWN, pull_up=True, bounce_time=0.3)
     btn_left = Button(PIN_LEFT, pull_up=True, bounce_time=0.3)
     btn_right = Button(PIN_RIGHT, pull_up=True, bounce_time=0.3)
+    btn_menu = Button(PIN_MENU, pull_up=True, bounce_time=0.3)
+    btn_plus = Button(PIN_PLUS, pull_up=True, bounce_time=0.3)
+    btn_minus = Button(PIN_MINUS, pull_up=True, bounce_time=0.3)
     
     btn_record.when_pressed = handle_record
     btn_ok.when_pressed = handle_ok
@@ -821,18 +1411,21 @@ if __name__ == '__main__':
     btn_down.when_pressed = handle_down
     btn_left.when_pressed = handle_left
     btn_right.when_pressed = handle_right
+    btn_menu.when_pressed = handle_menu
+    btn_plus.when_pressed = handle_zoom_in
+    btn_minus.when_pressed = handle_zoom_out
     
     print("✅ GPIO OK")
     
     print("\n" + "="*70)
     print("🎬 SYSTEM KAMERA - RASPBERRY PI 5")
     print("="*70)
-    print("📺 Kamera live | 🔴 Record | 📹 Videos | ✅ Play | 🗑️  Delete")
+    print("📺 Kamera | 🔴 Record | 📹 Videos | ⚙️  Menu | 🔍 +/- Zoom")
     print("="*70 + "\n")
     
     clock = pygame.time.Clock()
     
-    # Dla ciągłego przewijania
+    # Dla ciągłego przewijania i zoomu
     last_continuous_seek = 0
     hold_start_right = None
     hold_start_left = None
@@ -846,10 +1439,10 @@ if __name__ == '__main__':
                     if event.key == pygame.K_ESCAPE:
                         cleanup()
             
-            # CIĄGŁE PRZEWIJANIE - sprawdzaj czy przyciski są przytrzymane
+            current_time = time.time()
+            
+            # CIĄGŁE PRZEWIJANIE podczas odtwarzania
             if current_state == STATE_PLAYING:
-                current_time = time.time()
-
                 if btn_right.is_pressed:
                     if hold_start_right is None:
                         hold_start_right = current_time
@@ -862,8 +1455,6 @@ if __name__ == '__main__':
                 else:
                     hold_start_left = None
                 
-                
-                # Sprawdzaj co 0.1s (10 razy na sekundę)
                 if btn_right.is_pressed:
                     if hold_start_right is not None and current_time - hold_start_right >= 4 and current_time - hold_start_right < 10:
                         seek_video(1.0)   
@@ -882,9 +1473,29 @@ if __name__ == '__main__':
                         seek_video(-0.5)
                     last_continuous_seek = current_time
             
-            # Pobierz klatkę tylko dla ekranu głównego
-            frame = None
+            # CIĄGŁY ZOOM na ekranie głównym
             if current_state == STATE_MAIN:
+                if btn_plus.is_pressed and current_time - last_zoom_time >= 0.05:
+                    adjust_zoom(ZOOM_STEP)
+                    last_zoom_time = current_time
+                
+                if btn_minus.is_pressed and current_time - last_zoom_time >= 0.05:
+                    adjust_zoom(-ZOOM_STEP)
+                    last_zoom_time = current_time
+            
+            # CIĄGŁE PRZEWIJANIE W MENU
+            if current_state == STATE_MENU:
+                if btn_up.is_pressed and current_time - last_menu_scroll >= 0.15:
+                    menu_navigate_up()
+                    last_menu_scroll = current_time
+                
+                if btn_down.is_pressed and current_time - last_menu_scroll >= 0.15:
+                    menu_navigate_down()
+                    last_menu_scroll = current_time
+            
+            # Pobierz klatkę dla odpowiednich ekranów
+            frame = None
+            if current_state in [STATE_MAIN, STATE_MENU]:
                 try:
                     frame = camera.capture_array()
                 except:
@@ -900,6 +1511,8 @@ if __name__ == '__main__':
                 draw_confirm_dialog()
             elif current_state == STATE_PLAYING:
                 draw_playing_screen()
+            elif current_state == STATE_MENU:
+                draw_menu_screen(frame)
             
             pygame.display.flip()
             clock.tick(30)
