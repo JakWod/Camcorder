@@ -15,6 +15,7 @@ import subprocess
 import time
 import json
 from PIL import Image, ImageDraw, ImageFont
+import threading
 
 # ============================================================================
 # KONFIGURACJA
@@ -97,7 +98,7 @@ menu_selected = 0
 menu_editing = False
 menu_edit_value = ""
 last_menu_scroll = 0
-last_videos_scroll = 0  # Nowe dla videos
+last_videos_scroll = 0
 
 # Camera Settings
 camera_settings = {
@@ -124,8 +125,8 @@ last_zoom_time = 0
 ZOOM_STEP = 0.02
 
 # Timing dla ciągłego przewijania
-MENU_SCROLL_DELAY = 0.35  # Sekundy między ruchami w menu (wolniejsze)
-VIDEOS_SCROLL_DELAY = 0.25  # Sekundy między ruchami w videos
+MENU_SCROLL_DELAY = 0.35
+VIDEOS_SCROLL_DELAY = 0.25
 
 
 # ============================================================================
@@ -254,60 +255,123 @@ def adjust_zoom(delta):
     apply_zoom(new_zoom)
 
 
-def apply_date_overlay(request):
-    """Callback do rysowania daty na klatkach podczas nagrywania"""
+def add_date_overlay_to_video(video_path):
+    """Dodaj overlay daty do nagrannego video używając ffmpeg"""
     if not camera_settings.get("show_date", False):
-        return
+        print("📅 Data wyłączona - pomijam overlay")
+        return True
     
     try:
-        with request.make_array("main") as array:
-            img = Image.fromarray(array)
-            draw = ImageDraw.Draw(img)
-            
-            if camera_settings.get("manual_date"):
-                date_text = camera_settings["manual_date"]
-            else:
-                if camera_settings.get("show_time", False):
-                    date_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                else:
-                    date_text = datetime.now().strftime("%Y-%m-%d")
-            
+        print(f"📅 Dodawanie daty do video...")
+        
+        # Pobierz datę
+        if camera_settings.get("manual_date"):
+            date_text = camera_settings["manual_date"]
+        else:
+            # Użyj daty z nazwy pliku
             try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
+                filename_parts = video_path.stem.split('_')
+                if len(filename_parts) >= 3:
+                    date_part = filename_parts[1]  # 20231215
+                    time_part = filename_parts[2]  # 143022
+                    date_obj = datetime.strptime(f"{date_part}_{time_part}", "%Y%m%d_%H%M%S")
+                    
+                    if camera_settings.get("show_time", False):
+                        date_text = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        date_text = date_obj.strftime("%Y-%m-%d")
+                else:
+                    date_obj = datetime.fromtimestamp(video_path.stat().st_mtime)
+                    date_text = date_obj.strftime("%Y-%m-%d")
             except:
-                font = ImageFont.load_default()
-            
-            position = camera_settings.get("date_position", "top_left")
-            margin = 30
-            
-            bbox = draw.textbbox((0, 0), date_text, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            
-            if position == "top_left":
-                x, y = margin, margin
-            elif position == "top_right":
-                x, y = 1920 - text_width - margin, margin
-            elif position == "bottom_left":
-                x, y = margin, 1080 - text_height - margin
-            elif position == "bottom_right":
-                x, y = 1920 - text_width - margin, 1080 - text_height - margin
-            else:
-                x, y = margin, margin
-            
-            outline_width = 3
-            for dx in range(-outline_width, outline_width + 1):
-                for dy in range(-outline_width, outline_width + 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    draw.text((x + dx, y + dy), date_text, font=font, fill=(0, 0, 0))
-            
-            draw.text((x, y), date_text, font=font, fill=(255, 255, 0))
-            
-            array[:] = np.array(img)
-    
+                date_text = datetime.now().strftime("%Y-%m-%d")
+        
+        # Pozycja
+        position = camera_settings.get("date_position", "top_left")
+        margin = 30
+        
+        if position == "top_left":
+            x, y = str(margin), str(margin)
+        elif position == "top_right":
+            x = f"w-text_w-{margin}"
+            y = str(margin)
+        elif position == "bottom_left":
+            x = str(margin)
+            y = f"h-text_h-{margin}"
+        elif position == "bottom_right":
+            x = f"w-text_w-{margin}"
+            y = f"h-text_h-{margin}"
+        else:
+            x, y = str(margin), str(margin)
+        
+        # Stwórz tymczasowy plik
+        temp_file = video_path.parent / f"temp_{video_path.name}"
+        
+        # Użyj ffmpeg do dodania overlay
+        drawtext_filter = (
+            f"drawtext="
+            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+            f"text='{date_text}':"
+            f"fontcolor=yellow:"
+            f"fontsize=40:"
+            f"borderw=3:"
+            f"bordercolor=black:"
+            f"x={x}:"
+            f"y={y}"
+        )
+        
+        cmd = [
+            "ffmpeg",
+            "-i", str(video_path),
+            "-vf", drawtext_filter,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "23",
+            "-c:a", "copy",
+            "-y",
+            str(temp_file)
+        ]
+        
+        print(f"🎬 Przetwarzanie ffmpeg...")
+        result = subprocess.run(
+            cmd, 
+            capture_output=True, 
+            text=True,
+            timeout=120
+        )
+        
+        if result.returncode != 0:
+            print(f"⚠️  FFmpeg error: {result.stderr}")
+            if temp_file.exists():
+                temp_file.unlink()
+            return False
+        
+        # Sprawdź czy tymczasowy plik istnieje i ma sensowny rozmiar
+        if not temp_file.exists() or temp_file.stat().st_size < 1000:
+            print(f"⚠️  Plik tymczasowy nieprawidłowy")
+            if temp_file.exists():
+                temp_file.unlink()
+            return False
+        
+        # Zamień oryginalny plik
+        video_path.unlink()
+        temp_file.rename(video_path)
+        
+        print(f"✅ Data dodana do video: {date_text}")
+        return True
+        
+    except subprocess.TimeoutExpired:
+        print(f"⚠️  Timeout podczas dodawania daty")
+        if 'temp_file' in locals() and temp_file.exists():
+            temp_file.unlink()
+        return False
     except Exception as e:
-        print(f"⚠️  Błąd overlay daty: {e}")
+        print(f"⚠️  Błąd dodawania daty: {e}")
+        import traceback
+        traceback.print_exc()
+        if 'temp_file' in locals() and temp_file.exists():
+            temp_file.unlink()
+        return False
 
 
 # ============================================================================
@@ -602,24 +666,78 @@ def draw_menu_screen(frame):
 # FUNKCJE POMOCNICZE
 # ============================================================================
 
-def generate_thumbnail(video_path):
-    """Generuj miniaturkę"""
-    try:
-        print(f"🖼️  Miniatura: {video_path.name}")
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            return False
-        ret, frame = cap.read()
-        if ret and frame is not None:
-            thumbnail_path = THUMBNAIL_DIR / f"{video_path.stem}.jpg"
+def generate_thumbnail(video_path, max_retries=3):
+    """Generuj miniaturkę z retry logic"""
+    thumbnail_path = THUMBNAIL_DIR / f"{video_path.stem}.jpg"
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"🖼️  Miniatura: {video_path.name} (próba {attempt + 1}/{max_retries})")
+            
+            # Sprawdź czy plik istnieje i ma sensowny rozmiar
+            if not video_path.exists():
+                print(f"⚠️  Plik nie istnieje: {video_path}")
+                time.sleep(1)
+                continue
+            
+            file_size = video_path.stat().st_size
+            if file_size < 10000:  # Mniej niż 10KB
+                print(f"⚠️  Plik za mały: {file_size} bajtów")
+                time.sleep(1)
+                continue
+            
+            # Próbuj otworzyć wideo
+            cap = cv2.VideoCapture(str(video_path))
+            
+            if not cap.isOpened():
+                print(f"⚠️  Nie można otworzyć: {video_path.name}")
+                cap.release()
+                time.sleep(1)
+                continue
+            
+            # Pobierz pierwszą klatkę
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret or frame is None:
+                print(f"⚠️  Nie można pobrać klatki (próba {attempt + 1})")
+                time.sleep(1)
+                continue
+            
+            # Sprawdź czy klatka ma sensowne wymiary
+            if frame.shape[0] < 10 or frame.shape[1] < 10:
+                print(f"⚠️  Klatka zbyt mała: {frame.shape}")
+                time.sleep(1)
+                continue
+            
+            # Zmień rozmiar i zapisz
             frame_resized = cv2.resize(frame, (320, 180))
-            cv2.imwrite(str(thumbnail_path), frame_resized)
-            print(f"✅ Miniatura OK")
-        cap.release()
-        return ret
-    except Exception as e:
-        print(f"❌ Błąd miniatury: {e}")
-        return False
+            success = cv2.imwrite(str(thumbnail_path), frame_resized)
+            
+            if not success:
+                print(f"⚠️  Nie można zapisać miniatury")
+                time.sleep(1)
+                continue
+            
+            # Sprawdź czy miniatura została zapisana
+            if thumbnail_path.exists() and thumbnail_path.stat().st_size > 1000:
+                print(f"✅ Miniatura OK: {thumbnail_path.name}")
+                return True
+            else:
+                print(f"⚠️  Miniatura nieprawidłowa")
+                if thumbnail_path.exists():
+                    thumbnail_path.unlink()
+                time.sleep(1)
+                continue
+                
+        except Exception as e:
+            print(f"⚠️  Błąd miniatury (próba {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)  # Dłuższe czekanie między próbami
+            continue
+    
+    print(f"❌ Nie udało się wygenerować miniatury po {max_retries} próbach")
+    return False
 
 
 def refresh_videos():
@@ -697,7 +815,7 @@ def draw_text_with_outline(text, font, color, outline_color, x, y, center=False)
 
 
 def get_display_date():
-    """Pobierz datę do wyświetlenia"""
+    """Pobierz datę do wyświetlenia na podglądzie"""
     if camera_settings.get("manual_date"):
         return camera_settings["manual_date"]
     else:
@@ -708,7 +826,7 @@ def get_display_date():
 
 
 def draw_date_overlay():
-    """Rysuj overlay daty na ekranie (tylko podgląd, nie na nagraniu)"""
+    """Rysuj overlay daty na ekranie (tylko podgląd)"""
     if not camera_settings.get("show_date", False):
         return
     
@@ -796,9 +914,6 @@ def init_camera():
         controls={"FrameRate": 30}
     )
     camera.configure(config)
-    
-    camera.pre_callback = apply_date_overlay
-    
     camera.start()
     
     load_config()
@@ -821,26 +936,69 @@ def start_recording():
         
         print(f"🔴 START: {current_file.name}")
         
-        encoder = H264Encoder(bitrate=10000000)
-        output = FfmpegOutput(str(current_file))
-        camera.start_encoder(encoder, output)
-        recording = True
+        try:
+            encoder = H264Encoder(bitrate=10000000)
+            output = FfmpegOutput(str(current_file))
+            camera.start_encoder(encoder, output)
+            recording = True
+        except Exception as e:
+            print(f"❌ Błąd start nagrywania: {e}")
+            recording = False
+            current_file = None
 
 
 def stop_recording():
     """Stop nagrywania"""
-    global recording, current_file
+    global recording, current_file, encoder
     
     if recording:
-        print("⏹️  STOP")
-        camera.stop_encoder()
+        print("⏹️  STOP nagrywania...")
         recording = False
+        saved_file = current_file  # Zapisz referencję przed wyzerowaniem
         
-        if current_file and current_file.exists():
-            size = current_file.stat().st_size / (1024*1024)
-            print(f"✅ Zapisano: {size:.1f} MB")
-            time.sleep(0.5)
-            generate_thumbnail(current_file)
+        try:
+            # Zatrzymaj encoder
+            camera.stop_encoder()
+            print("✅ Encoder zatrzymany")
+            
+            # Poczekaj na zakończenie zapisu
+            time.sleep(1.5)
+            
+            # Sprawdź czy plik istnieje i ma sensowny rozmiar
+            if saved_file and saved_file.exists():
+                size = saved_file.stat().st_size / (1024*1024)
+                
+                if size < 0.1:
+                    print(f"⚠️  Plik zbyt mały ({size:.1f} MB)")
+                else:
+                    print(f"✅ Zapisano: {size:.1f} MB - {saved_file.name}")
+                    
+                    # NAJPIERW generuj miniaturę (przed przetwarzaniem ffmpeg)
+                    print("🖼️  Generowanie miniatury z oryginalnego pliku...")
+                    generate_thumbnail(saved_file)
+                    
+                    # Dodaj datę do video w tle (jeśli włączone)
+                    if camera_settings.get("show_date", False):
+                        def process_video():
+                            print("📅 Rozpoczynam dodawanie daty...")
+                            add_date_overlay_to_video(saved_file)
+                            print("✅ Przetwarzanie zakończone")
+                        
+                        thread = threading.Thread(target=process_video, daemon=True)
+                        thread.start()
+                    else:
+                        print("✅ Przetwarzanie zakończone (data wyłączona)")
+            else:
+                print(f"❌ Plik nie istnieje: {saved_file}")
+                
+        except Exception as e:
+            print(f"❌ Błąd podczas zatrzymywania nagrywania: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        finally:
+            encoder = None
+            current_file = None
 
 
 # ============================================================================
