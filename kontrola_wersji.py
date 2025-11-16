@@ -97,6 +97,7 @@ menu_selected = 0
 menu_editing = False
 menu_edit_value = ""
 last_menu_scroll = 0
+last_videos_scroll = 0  # Nowe dla videos
 
 # Camera Settings
 camera_settings = {
@@ -108,7 +109,7 @@ camera_settings = {
     "exposure_compensation": 0.0,
     "zoom": 0.0,
     "show_date": False,
-    "show_time": False,  # Nowa opcja - czy pokazywać godzinę
+    "show_time": False,
     "date_position": "top_left",
     "manual_date": None,
     "awb_mode": "auto"
@@ -120,7 +121,11 @@ DATE_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"]
 
 # Zoom continuous
 last_zoom_time = 0
-ZOOM_STEP = 0.02  # Mniejszy krok dla płynnego zoomu
+ZOOM_STEP = 0.02
+
+# Timing dla ciągłego przewijania
+MENU_SCROLL_DELAY = 0.35  # Sekundy między ruchami w menu (wolniejsze)
+VIDEOS_SCROLL_DELAY = 0.25  # Sekundy między ruchami w videos
 
 
 # ============================================================================
@@ -247,7 +252,6 @@ def adjust_zoom(delta):
     
     camera_settings["zoom"] = new_zoom
     apply_zoom(new_zoom)
-    # Nie zapisujemy co zmianę, tylko przy zamknięciu menu
 
 
 def apply_date_overlay(request):
@@ -256,13 +260,10 @@ def apply_date_overlay(request):
         return
     
     try:
-        # Pobierz obraz z requestu
         with request.make_array("main") as array:
-            # Konwersja do PIL Image
             img = Image.fromarray(array)
             draw = ImageDraw.Draw(img)
             
-            # Pobierz datę
             if camera_settings.get("manual_date"):
                 date_text = camera_settings["manual_date"]
             else:
@@ -271,17 +272,14 @@ def apply_date_overlay(request):
                 else:
                     date_text = datetime.now().strftime("%Y-%m-%d")
             
-            # Czcionka - użyj domyślnej PIL font
             try:
                 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)
             except:
                 font = ImageFont.load_default()
             
-            # Pozycja
             position = camera_settings.get("date_position", "top_left")
             margin = 30
             
-            # Oblicz rozmiar tekstu
             bbox = draw.textbbox((0, 0), date_text, font=font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
@@ -297,7 +295,6 @@ def apply_date_overlay(request):
             else:
                 x, y = margin, margin
             
-            # Rysuj obrys (czarny)
             outline_width = 3
             for dx in range(-outline_width, outline_width + 1):
                 for dy in range(-outline_width, outline_width + 1):
@@ -305,10 +302,8 @@ def apply_date_overlay(request):
                         continue
                     draw.text((x + dx, y + dy), date_text, font=font, fill=(0, 0, 0))
             
-            # Rysuj tekst (żółty)
             draw.text((x, y), date_text, font=font, fill=(255, 255, 0))
             
-            # Skopiuj z powrotem do array
             array[:] = np.array(img)
     
     except Exception as e:
@@ -747,6 +742,20 @@ def format_time(seconds):
     return f"{minutes}:{secs:02d}"
 
 
+def videos_navigate_up():
+    """Nawigacja w górę w liście videos"""
+    global selected_index
+    if videos:
+        selected_index = max(0, selected_index - 1)
+
+
+def videos_navigate_down():
+    """Nawigacja w dół w liście videos"""
+    global selected_index
+    if videos:
+        selected_index = min(len(videos) - 1, selected_index + 1)
+
+
 # ============================================================================
 # INICJALIZACJA
 # ============================================================================
@@ -788,7 +797,6 @@ def init_camera():
     )
     camera.configure(config)
     
-    # Ustaw callback dla overlay daty podczas nagrywania
     camera.pre_callback = apply_date_overlay
     
     camera.start()
@@ -959,16 +967,13 @@ def draw_main_screen(frame):
         except:
             draw_text("📹 Kamera", font_large, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
     
-    # Overlay daty (tylko podgląd - na nagraniu jest przez callback)
     draw_date_overlay()
     
-    # Wskaźnik zoomu
     if camera_settings.get("zoom", 0.0) > 0.0:
         zoom_percent = int(camera_settings["zoom"] * 100)
         draw_text(f"🔍 {zoom_percent}%", font_small, YELLOW, SCREEN_WIDTH - 150, 20, 
                  bg_color=BLACK, padding=8)
     
-    # Panel statusu
     panel_height = 120
     panel_y = SCREEN_HEIGHT - panel_height
     
@@ -1311,7 +1316,7 @@ def handle_delete():
 def handle_up():
     global selected_index
     if current_state == STATE_VIDEOS and videos:
-        selected_index = max(0, selected_index - 1)
+        videos_navigate_up()
     elif current_state == STATE_PLAYING:
         print("🔊 Głośność UP (TBD)")
     elif current_state == STATE_MENU:
@@ -1321,7 +1326,7 @@ def handle_up():
 def handle_down():
     global selected_index
     if current_state == STATE_VIDEOS and videos:
-        selected_index = min(len(videos) - 1, selected_index + 1)
+        videos_navigate_down()
     elif current_state == STATE_PLAYING:
         print("🔉 Głośność DOWN (TBD)")
     elif current_state == STATE_MENU:
@@ -1370,7 +1375,6 @@ def cleanup(signum=None, frame=None):
         except:
             pass
     
-    # Zapisz zoom przy zamknięciu
     save_config()
     
     try:
@@ -1425,7 +1429,6 @@ if __name__ == '__main__':
     
     clock = pygame.time.Clock()
     
-    # Dla ciągłego przewijania i zoomu
     last_continuous_seek = 0
     hold_start_right = None
     hold_start_left = None
@@ -1483,15 +1486,25 @@ if __name__ == '__main__':
                     adjust_zoom(-ZOOM_STEP)
                     last_zoom_time = current_time
             
-            # CIĄGŁE PRZEWIJANIE W MENU
+            # CIĄGŁE PRZEWIJANIE W MENU (wolniejsze)
             if current_state == STATE_MENU:
-                if btn_up.is_pressed and current_time - last_menu_scroll >= 0.15:
+                if btn_up.is_pressed and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
                     menu_navigate_up()
                     last_menu_scroll = current_time
                 
-                if btn_down.is_pressed and current_time - last_menu_scroll >= 0.15:
+                if btn_down.is_pressed and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
                     menu_navigate_down()
                     last_menu_scroll = current_time
+            
+            # CIĄGŁE PRZEWIJANIE W VIDEOS
+            if current_state == STATE_VIDEOS:
+                if btn_up.is_pressed and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
+                    videos_navigate_up()
+                    last_videos_scroll = current_time
+                
+                if btn_down.is_pressed and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
+                    videos_navigate_down()
+                    last_videos_scroll = current_time
             
             # Pobierz klatkę dla odpowiednich ekranów
             frame = None
