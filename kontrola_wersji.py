@@ -68,7 +68,7 @@ camera = None
 recording = False
 recording_start_time = None
 current_file = None
-current_recording_fps = None  # NOWE: Zapisz FPS podczas nagrywania
+current_recording_fps = None
 encoder = None
 running = True
 screen = None
@@ -376,6 +376,12 @@ def add_date_overlay_to_video(video_path):
             except:
                 date_text = datetime.now().strftime("%Y-%m-%d")
         
+        print(f"📅 Tekst overlay: {date_text}")
+        
+        # ESCAPOWANIE dla ffmpeg - KLUCZOWE!
+        # Dwukropki muszą być escapowane w ffmpeg
+        date_text_escaped = date_text.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
+        
         # Ustaw pozycję
         position = camera_settings.get("date_position", "top_left")
         margin = 30
@@ -396,11 +402,11 @@ def add_date_overlay_to_video(video_path):
         
         temp_file = video_path.parent / f"temp_{video_path.name}"
         
-        # Filtr drawtext
+        # Filtr drawtext z prawidłowym escapowaniem
         drawtext_filter = (
             f"drawtext="
             f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
-            f"text='{date_text}':"
+            f"text='{date_text_escaped}':"
             f"fontcolor=yellow:"
             f"fontsize=40:"
             f"borderw=3:"
@@ -409,7 +415,9 @@ def add_date_overlay_to_video(video_path):
             f"y={y}"
         )
         
-        # Komenda ffmpeg - ZACHOWAJ FPS
+        print(f"🎬 Filtr: {drawtext_filter}")
+        
+        # Komenda ffmpeg - BEZ zmiany FPS (fps_mode passthrough)
         cmd = [
             "ffmpeg",
             "-i", str(video_path),
@@ -417,8 +425,7 @@ def add_date_overlay_to_video(video_path):
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "23",
-            "-r", str(original_fps),
-            "-vsync", "cfr",
+            "-fps_mode", "passthrough",  # Nie zmieniaj FPS!
             "-c:a", "copy",
             "-y",
             str(temp_file)
@@ -450,7 +457,7 @@ def add_date_overlay_to_video(video_path):
         video_path.unlink()
         temp_file.rename(video_path)
         
-        print(f"✅ Data dodana")
+        print(f"✅ Data dodana pomyślnie")
         return True
         
     except Exception as e:
@@ -940,33 +947,48 @@ def draw_grid_overlay():
 
 
 def draw_battery_icon():
-    """Rysuj ikonę baterii"""
+    """Rysuj ikonę baterii z outline i oddzielnymi segmentami"""
     battery_x = SCREEN_WIDTH - 100
     battery_y = 20
     battery_width = 60
     battery_height = 28
     
-    pygame.draw.rect(screen, WHITE, (battery_x, battery_y, battery_width, battery_height), 3, border_radius=4)
+    # Obrys baterii (czarny, cienki)
+    pygame.draw.rect(screen, BLACK, 
+                    (battery_x - 2, battery_y - 2, battery_width + 4, battery_height + 4), 
+                    border_radius=4)
     
+    # Rama baterii (biała)
+    pygame.draw.rect(screen, WHITE, 
+                    (battery_x, battery_y, battery_width, battery_height), 
+                    3, border_radius=4)
+    
+    # Końcówka baterii
     tip_x = battery_x + battery_width
     tip_y = battery_y + 8
     tip_width = 6
     tip_height = 12
+    
+    # Obrys końcówki
+    pygame.draw.rect(screen, BLACK, (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
     pygame.draw.rect(screen, WHITE, (tip_x, tip_y, tip_width, tip_height))
     
+    # 4 segmenty baterii jako osobne obiekty
     segment_width = 8
     segment_height = battery_height - 10
     segment_spacing = 2
     segment_x_start = battery_x + 6
     segment_y = battery_y + 5
     
+    # Kąt nachylenia
     angle = 30
+    top_offset = segment_height * math.tan(math.radians(angle)) / 2
     
+    # Rysuj 4 segmenty
     for i in range(4):
         segment_x = segment_x_start + i * (segment_width + segment_spacing)
         
-        top_offset = segment_height * math.tan(math.radians(angle)) / 2
-        
+        # Punkty dla równoległoboku
         points = [
             (segment_x + top_offset, segment_y),
             (segment_x + segment_width + top_offset, segment_y),
@@ -974,6 +996,16 @@ def draw_battery_icon():
             (segment_x - top_offset, segment_y + segment_height)
         ]
         
+        # Czarny outline dla każdego segmentu
+        outline_points = [
+            (points[0][0] - 1, points[0][1] - 1),
+            (points[1][0] + 1, points[1][1] - 1),
+            (points[2][0] + 1, points[2][1] + 1),
+            (points[3][0] - 1, points[3][1] + 1)
+        ]
+        pygame.draw.polygon(screen, BLACK, outline_points)
+        
+        # Biały segment
         pygame.draw.polygon(screen, WHITE, points)
 
 
@@ -991,7 +1023,7 @@ def draw_zoom_bar():
     pygame.draw.rect(screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 2, border_radius=5)
     
     draw_text("W", font_small, WHITE, bar_x + 20, bar_y + bar_height // 2, center=True)
-    draw_text("T", font_small, WHITE, bar_x + bar_width - 20, bar_y + bar_height // 2, center=True)
+    draw_text("T", font_small, WHITE, bar_x + bar_width - 20, (bar_y + bar_height // 2) + 2, center=True)
     
     track_width = bar_width - 80
     track_x = bar_x + 40
@@ -1190,7 +1222,7 @@ def get_display_date():
 
 
 def draw_date_overlay():
-    """Rysuj overlay daty"""
+    """Rysuj overlay daty na podglądzie na żywo (NIE na nagraniu)"""
     if not camera_settings.get("show_date", False):
         return
     
