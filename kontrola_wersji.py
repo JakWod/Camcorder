@@ -143,7 +143,9 @@ RESOLUTION_MAP = {
 
 # Zoom
 last_zoom_time = 0
+last_zoom_change_time = 0
 ZOOM_STEP = 0.02
+ZOOM_BAR_TIMEOUT = 1.0
 
 # Timing
 MENU_SCROLL_DELAY = 0.35
@@ -323,13 +325,14 @@ def apply_zoom(zoom_level):
 
 def adjust_zoom(delta):
     """Zmień zoom o delta"""
-    global camera_settings
+    global camera_settings, last_zoom_change_time
     
     new_zoom = camera_settings["zoom"] + delta
     new_zoom = max(0.0, min(1.0, new_zoom))
     
     camera_settings["zoom"] = new_zoom
     apply_zoom(new_zoom)
+    last_zoom_change_time = time.time()
 
 
 def add_date_overlay_to_video(video_path):
@@ -947,56 +950,81 @@ def draw_grid_overlay():
 
 
 def draw_battery_icon():
-    """Rysuj ikonę baterii z outline i oddzielnymi segmentami"""
-    battery_x = SCREEN_WIDTH - 100
-    battery_y = 20
-    battery_width = 60
-    battery_height = 28
-    
+    """Rysuj poziomo odbitą (patrzącą w lewo) i lekko zmniejszoną ikonę baterii."""
+    scale = 1  # lekkie zmniejszenie
+
+    # oryginalne wymiary/przesunięcia * przed skalowaniem
+    orig_battery_x = SCREEN_WIDTH - 100
+    orig_battery_y = 20
+    orig_battery_width = 60
+    orig_battery_height = 28
+
+    # skalowane wartości
+    battery_x = int(orig_battery_x * scale)
+    battery_y = int(orig_battery_y * scale)
+    battery_width = int(orig_battery_width * scale)
+    battery_height = int(orig_battery_height * scale)
+
+    # oś odbicia poziomego (środek baterii przed odbiciem)
+    flip_center_x = battery_x + battery_width // 2
+
+    def flip_x(x, w=0):
+        # zwraca lewy współrzędny po odbiciu poziomym względem flip_center_x
+        # jeśli podamy szerokość w, zostanie uwzględniona (x jest lewym rogiem)
+        return 2 * flip_center_x - x - w
+
     # Obrys baterii (czarny, cienki)
-    pygame.draw.rect(screen, BLACK, 
-                    (battery_x - 2, battery_y - 2, battery_width + 4, battery_height + 4), 
-                    border_radius=4)
-    
+    outline_rect = (battery_x - 2, battery_y - 2, battery_width + 4, battery_height + 4)
+    # flipujemy rect: obliczamy nowy x z uwzględnieniem szerokości
+    o_x = flip_x(outline_rect[0], outline_rect[2])
+    pygame.draw.rect(screen, BLACK,
+                     (o_x, outline_rect[1], outline_rect[2], outline_rect[3]),
+                     border_radius=4)
+
     # Rama baterii (biała)
-    pygame.draw.rect(screen, WHITE, 
-                    (battery_x, battery_y, battery_width, battery_height), 
-                    3, border_radius=4)
-    
-    # Końcówka baterii
-    tip_x = battery_x + battery_width
-    tip_y = battery_y + 8
-    tip_width = 6
-    tip_height = 12
-    
-    # Obrys końcówki
-    pygame.draw.rect(screen, BLACK, (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
-    pygame.draw.rect(screen, WHITE, (tip_x, tip_y, tip_width, tip_height))
-    
-    # 4 segmenty baterii jako osobne obiekty
-    segment_width = 8
-    segment_height = battery_height - 10
-    segment_spacing = 2
-    segment_x_start = battery_x + 6
-    segment_y = battery_y + 5
-    
-    # Kąt nachylenia
+    frame_rect = (battery_x, battery_y, battery_width, battery_height)
+    f_x = flip_x(frame_rect[0], frame_rect[2])
+    pygame.draw.rect(screen, WHITE,
+                     (f_x, frame_rect[1], frame_rect[2], frame_rect[3]),
+                     3, border_radius=4)
+
+    # Końcówka baterii (tip) - oryginalnie po prawej, po odbiciu będzie po lewej
+    tip_width = int(6 * scale)
+    tip_height = int(12 * scale)
+    tip_x = battery_x + battery_width  # oryginalne: koniec po prawej
+    tip_y = battery_y + int(8 * scale)
+
+    # Po odbiciu końcówka znajdzie się po lewej stronie obudowy -> flip_x z szerokością tip
+    tip_rect_outline_x = flip_x(tip_x - 1, tip_width + 2)
+    pygame.draw.rect(screen, BLACK, (tip_rect_outline_x, tip_y - 1, tip_width + 2, tip_height + 2))
+    tip_rect_x = flip_x(tip_x, tip_width)
+    pygame.draw.rect(screen, WHITE, (tip_rect_x, tip_y, tip_width, tip_height))
+
+    # Segmenty
+    segment_width = int(8 * scale)
+    segment_height = battery_height - int(10 * scale)
+    segment_spacing = int(2 * scale)
+    segment_x_start = battery_x + int(6 * scale)
+    segment_y = battery_y + int(5 * scale)
+
     angle = 30
     top_offset = segment_height * math.tan(math.radians(angle)) / 2
-    
-    # Rysuj 4 segmenty
+
     for i in range(4):
         segment_x = segment_x_start + i * (segment_width + segment_spacing)
-        
-        # Punkty dla równoległoboku
-        points = [
+
+        # punkty równoległoboku (przed odbiciem)
+        p = [
             (segment_x + top_offset, segment_y),
             (segment_x + segment_width + top_offset, segment_y),
             (segment_x + segment_width - top_offset, segment_y + segment_height),
             (segment_x - top_offset, segment_y + segment_height)
         ]
-        
-        # Czarny outline dla każdego segmentu
+
+        # odbicie poziome punktów względem flip_center_x
+        points = [ (flip_x(x), y) for (x, y) in p ]
+
+        # Outline (drobne przesunięcia konturu - tu też x są już po flipie)
         outline_points = [
             (points[0][0] - 1, points[0][1] - 1),
             (points[1][0] + 1, points[1][1] - 1),
@@ -1004,13 +1032,19 @@ def draw_battery_icon():
             (points[3][0] - 1, points[3][1] + 1)
         ]
         pygame.draw.polygon(screen, BLACK, outline_points)
-        
-        # Biały segment
         pygame.draw.polygon(screen, WHITE, points)
 
 
+
+
 def draw_zoom_bar():
-    """Rysuj pasek zoom W/T"""
+    """Rysuj pasek zoom W/T - tylko gdy aktywny"""
+    current_time = time.time()
+    
+    # Sprawdź czy minęła sekunda od ostatniej zmiany zoomu
+    if current_time - last_zoom_change_time > ZOOM_BAR_TIMEOUT:
+        return  # Nie rysuj jeśli timeout minął
+    
     bar_width = 300
     bar_height = 30
     bar_x = (SCREEN_WIDTH - bar_width) // 2
@@ -1047,25 +1081,28 @@ def draw_zoom_bar():
 
 
 def draw_recording_indicator():
-    """Rysuj wskaźnik nagrywania"""
-    if not recording or not recording_start_time:
-        return
-    
-    elapsed_time = time.time() - recording_start_time
-    hours = int(elapsed_time // 3600)
-    minutes = int((elapsed_time % 3600) // 60)
-    seconds = int(elapsed_time % 60)
-    milliseconds = int((elapsed_time % 1) * 100)
-    time_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}:{milliseconds:02d}"
-    
+    """Rysuj wskaźnik nagrywania lub STBY"""
     rec_x = 30
     rec_y = 30
     
-    if int(pygame.time.get_ticks() / 500) % 2:
-        pygame.draw.circle(screen, RED, (rec_x + 10, rec_y + 15), 8)
-    
-    draw_text_with_outline("REC", font_medium, RED, BLACK, rec_x + 30, rec_y)
-    draw_text_with_outline(time_text, font_medium, RED, BLACK, rec_x + 95, rec_y)
+    if recording and recording_start_time:
+        # Tryb nagrywania
+        elapsed_time = time.time() - recording_start_time
+        hours = int(elapsed_time // 3600)
+        minutes = int((elapsed_time % 3600) // 60)
+        seconds = int(elapsed_time % 60)
+        milliseconds = int((elapsed_time % 1) * 100)
+        time_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}:{milliseconds:02d}"
+        
+        if int(pygame.time.get_ticks() / 500) % 2:
+            pygame.draw.circle(screen, RED, (rec_x + 10, rec_y + 15), 8)
+        
+        draw_text_with_outline("REC", font_medium, RED, BLACK, rec_x + 30, rec_y)
+        draw_text_with_outline(time_text, font_medium, RED, BLACK, rec_x + 95, rec_y)
+    else:
+        # Tryb gotowości (STBY)
+        draw_text_with_outline("STBY", font_large, GREEN, BLACK, rec_x, rec_y)
+        
 
 
 def generate_thumbnail(video_path, max_retries=3):
@@ -1552,8 +1589,8 @@ def draw_main_screen(frame):
     draw_battery_icon()
     draw_zoom_bar()
     
-    if recording:
-        draw_recording_indicator()
+    draw_recording_indicator()
+        
     
     draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom", 
              font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
