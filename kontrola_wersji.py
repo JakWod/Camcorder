@@ -2,6 +2,7 @@
 import pygame
 import sys
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 import cv2
@@ -74,6 +75,7 @@ running = True
 screen = None
 current_state = STATE_MAIN
 confirm_selection = 0
+fake_battery_level = None  # None = użyj rzeczywistego poziomu, lub wartość 0-100
 
 # Video Player
 video_capture = None
@@ -109,6 +111,12 @@ current_submenu = None
 last_menu_scroll = 0
 last_videos_scroll = 0
 
+# SD Card Icons
+sd_icon_surface = None
+no_sd_icon_surface = None
+SD_ICON_FILE = None
+NO_SD_ICON_FILE = None
+
 # Camera Settings
 camera_settings = {
     "video_resolution": "1080p30",
@@ -141,6 +149,15 @@ RESOLUTION_MAP = {
     "4K30": {"size": (3840, 2160), "fps": 30},
 }
 
+# Bitrate dla różnych rozdzielczości (w bitach na sekundę)
+BITRATE_MAP = {
+    "1080p30": 10000000,   # 10 Mbps
+    "1080p60": 15000000,   # 15 Mbps
+    "720p30": 6000000,     # 6 Mbps
+    "720p60": 10000000,    # 10 Mbps
+    "4K30": 25000000,      # 25 Mbps
+}
+
 # Zoom
 last_zoom_time = 0
 last_zoom_change_time = 0
@@ -150,6 +167,236 @@ ZOOM_BAR_TIMEOUT = 1.0
 # Timing
 MENU_SCROLL_DELAY = 0.35
 VIDEOS_SCROLL_DELAY = 0.25
+
+
+# ============================================================================
+# FUNKCJE POMOCNICZE DLA IKON
+# ============================================================================
+
+def find_icon_file(base_name):
+    """Znajdź plik ikony z dowolnym rozszerzeniem"""
+    extensions = ['.png', '.PNG', '.jpg', '.JPG', '.jpeg', '.JPEG']
+    
+    for ext in extensions:
+        path = VIDEO_DIR / f"{base_name}{ext}"
+        if path.exists():
+            print(f"✅ Znaleziono ikonę: {path.name}")
+            return path
+    
+    print(f"⚠️  Nie znaleziono ikony: {base_name}")
+    return None
+
+
+def create_fallback_sd_icon(size, is_available):
+    """Stwórz prostą ikonę zastępczą"""
+    surface = pygame.Surface(size, pygame.SRCALPHA)
+    w, h = size
+    
+    if is_available:
+        # Zielona ikona karty SD
+        # Tło karty
+        pygame.draw.rect(surface, GREEN, (5, 15, w-10, h-20), border_radius=5)
+        pygame.draw.rect(surface, WHITE, (5, 15, w-10, h-20), 3, border_radius=5)
+        
+        # Wcięcie karty SD (góra)
+        notch_width = 16
+        notch_height = 8
+        notch_x = w//2 - notch_width//2
+        pygame.draw.rect(surface, BLACK, (notch_x, 15, notch_width, notch_height))
+        
+        # Kontakty na karcie (poziome linie)
+        for i in range(4):
+            y = 28 + i * 6
+            pygame.draw.line(surface, DARK_GRAY, (12, y), (w-12, y), 2)
+        
+        # Tekst SD
+        font = pygame.font.Font(None, 20)
+        text = font.render("SD", True, WHITE)
+        text_rect = text.get_rect(center=(w//2, h-15))
+        surface.blit(text, text_rect)
+    else:
+        # Czerwona ikona braku karty
+        # Tło karty
+        pygame.draw.rect(surface, RED, (5, 15, w-10, h-20), border_radius=5)
+        pygame.draw.rect(surface, WHITE, (5, 15, w-10, h-20), 3, border_radius=5)
+        
+        # Duży krzyżyk X
+        margin = 12
+        pygame.draw.line(surface, WHITE, (margin, 20), (w-margin, h-5), 5)
+        pygame.draw.line(surface, WHITE, (w-margin, 20), (margin, h-5), 5)
+        
+        # Tekst NO
+        font = pygame.font.Font(None, 18)
+        text = font.render("NO", True, WHITE)
+        text_rect = text.get_rect(center=(w//2, h//2))
+        # Cień
+        shadow = font.render("NO", True, BLACK)
+        shadow_rect = shadow.get_rect(center=(w//2+1, h//2+1))
+        surface.blit(shadow, shadow_rect)
+        surface.blit(text, text_rect)
+    
+    return surface
+
+
+def load_sd_icons():
+    """Wczytaj ikony kart SD"""
+    global sd_icon_surface, no_sd_icon_surface, SD_ICON_FILE, NO_SD_ICON_FILE
+    
+    icon_size = (60, 60)
+    
+    print("\n" + "="*60)
+    print("🔄 ŁADOWANIE IKON SD CARD")
+    print("="*60)
+    print(f"📁 Katalog: {VIDEO_DIR}")
+    
+    # Lista wszystkich plików w katalogu (dla diagnostyki)
+    try:
+        all_files = list(VIDEO_DIR.glob("*"))
+        print(f"📋 Pliki w katalogu ({len(all_files)}):")
+        for f in all_files[:15]:  # Pokaż pierwsze 15
+            if f.is_file():
+                print(f"   - {f.name}")
+    except Exception as e:
+        print(f"⚠️  Nie można listować plików: {e}")
+    
+    print()
+    
+    # Szukaj ikony SD (karta włożona)
+    SD_ICON_FILE = find_icon_file("sd")
+    
+    if SD_ICON_FILE and SD_ICON_FILE.exists():
+        try:
+            print(f"📂 Wczytywanie: {SD_ICON_FILE}")
+            print(f"   Rozmiar pliku: {SD_ICON_FILE.stat().st_size} bajtów")
+            
+            sd_img = pygame.image.load(str(SD_ICON_FILE))
+            original_size = sd_img.get_size()
+            print(f"   Oryginalny rozmiar: {original_size}")
+            
+            sd_icon_surface = pygame.transform.smoothscale(sd_img, icon_size)
+            print(f"✅ Ikona SD wczytana i przeskalowana do {icon_size}")
+            
+        except Exception as e:
+            print(f"❌ Błąd wczytywania {SD_ICON_FILE.name}: {e}")
+            print(f"   Tworzę ikonę zastępczą...")
+            sd_icon_surface = create_fallback_sd_icon(icon_size, True)
+    else:
+        print(f"⚠️  Brak pliku ikony SD - używam ikony zastępczej")
+        sd_icon_surface = create_fallback_sd_icon(icon_size, True)
+    
+    print()
+    
+    # Szukaj ikony NO SD (brak karty)
+    NO_SD_ICON_FILE = find_icon_file("nosd")
+    
+    if NO_SD_ICON_FILE and NO_SD_ICON_FILE.exists():
+        try:
+            print(f"📂 Wczytywanie: {NO_SD_ICON_FILE}")
+            print(f"   Rozmiar pliku: {NO_SD_ICON_FILE.stat().st_size} bajtów")
+            
+            no_sd_img = pygame.image.load(str(NO_SD_ICON_FILE))
+            original_size = no_sd_img.get_size()
+            print(f"   Oryginalny rozmiar: {original_size}")
+            
+            no_sd_icon_surface = pygame.transform.smoothscale(no_sd_img, icon_size)
+            print(f"✅ Ikona NO SD wczytana i przeskalowana do {icon_size}")
+            
+        except Exception as e:
+            print(f"❌ Błąd wczytywania {NO_SD_ICON_FILE.name}: {e}")
+            print(f"   Tworzę ikonę zastępczą...")
+            no_sd_icon_surface = create_fallback_sd_icon(icon_size, False)
+    else:
+        print(f"⚠️  Brak pliku ikony NO SD - używam ikony zastępczej")
+        no_sd_icon_surface = create_fallback_sd_icon(icon_size, False)
+    
+    print()
+    print("="*60)
+    print("✅ IKONY SD GOTOWE")
+    print("="*60 + "\n")
+
+
+# ============================================================================
+# FUNKCJE SD CARD
+# ============================================================================
+
+def check_sd_card():
+    """Sprawdź czy karta SD jest dostępna"""
+    try:
+        return VIDEO_DIR.exists() and os.access(str(VIDEO_DIR), os.W_OK)
+    except:
+        return False
+
+
+def get_available_space_gb():
+    """Pobierz dostępne miejsce na karcie w GB"""
+    try:
+        stat = shutil.disk_usage(str(VIDEO_DIR))
+        return stat.free / (1024**3)  # Konwersja na GB
+    except:
+        return 0
+
+
+def get_recording_time_estimate():
+    """Oblicz szacowany czas nagrywania na podstawie dostępnego miejsca"""
+    if not check_sd_card():
+        return "-- : --"
+    
+    try:
+        free_space_bytes = shutil.disk_usage(str(VIDEO_DIR)).free
+        
+        # Pobierz bitrate dla aktualnej rozdzielczości
+        resolution = camera_settings.get("video_resolution", "1080p30")
+        bitrate = BITRATE_MAP.get(resolution, 10000000)
+        
+        # Oblicz czas w sekundach
+        bytes_per_second = bitrate / 8
+        estimated_seconds = free_space_bytes / bytes_per_second
+        
+        # Konwersja na godziny i minuty
+        hours = int(estimated_seconds // 3600)
+        minutes = int((estimated_seconds % 3600) // 60)
+        
+        return f"{hours:02d}h {minutes:02d}m"
+    except:
+        return "-- : --"
+
+
+def get_recording_quality():
+    """Pobierz aktualną jakość nagrywania"""
+    resolution = camera_settings.get("video_resolution", "1080p30")
+    return resolution.replace("p", "p ")
+
+
+def draw_sd_card_info():
+    """Rysuj informacje o karcie SD"""
+    sd_x = SCREEN_WIDTH - 100
+    sd_y = 70  # Poniżej baterii
+    
+    # Sprawdź czy karta jest dostępna
+    sd_available = check_sd_card()
+    
+    # Narysuj odpowiednią ikonę
+    if sd_available and sd_icon_surface:
+        screen.blit(sd_icon_surface, (sd_x, sd_y))
+    elif not sd_available and no_sd_icon_surface:
+        screen.blit(no_sd_icon_surface, (sd_x, sd_y))
+    else:
+        # Fallback - rysuj tekst
+        draw_text_with_outline("SD" if sd_available else "NO", font_tiny, 
+                              GREEN if sd_available else RED, BLACK, sd_x + 15, sd_y + 20)
+    
+    # Informacje tekstowe poniżej ikony
+    info_y = sd_y + 65
+    
+    if sd_available:
+        # Czas nagrywania i jakość nagrywania obok siebie, 10 jednostek niżej
+        time_text = get_recording_time_estimate()
+        quality_text = get_recording_quality()
+        combined_text = f"{time_text} | {quality_text}"
+        draw_text_with_outline(combined_text, font_medium, WHITE, BLACK, sd_x - 175, info_y + 15)
+    else:
+        # Brak karty
+        draw_text_with_outline("BRAK SD", font_tiny, RED, BLACK, sd_x - 15, info_y)
 
 
 # ============================================================================
@@ -164,7 +411,7 @@ def get_current_fps():
 
 
 def extract_fps_from_filename(filename):
-    """Wyciągnij FPS z nazwy pliku (np. video_20250117_143022_30fps.mp4 -> 30)"""
+    """Wyciągnij FPS z nazwy pliku"""
     match = re.search(r'_(\d+)fps', str(filename))
     if match:
         fps = int(match.group(1))
@@ -381,8 +628,7 @@ def add_date_overlay_to_video(video_path):
         
         print(f"📅 Tekst overlay: {date_text}")
         
-        # ESCAPOWANIE dla ffmpeg - KLUCZOWE!
-        # Dwukropki muszą być escapowane w ffmpeg
+        # ESCAPOWANIE dla ffmpeg
         date_text_escaped = date_text.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
         
         # Ustaw pozycję
@@ -405,7 +651,7 @@ def add_date_overlay_to_video(video_path):
         
         temp_file = video_path.parent / f"temp_{video_path.name}"
         
-        # Filtr drawtext z prawidłowym escapowaniem
+        # Filtr drawtext
         drawtext_filter = (
             f"drawtext="
             f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
@@ -420,7 +666,7 @@ def add_date_overlay_to_video(video_path):
         
         print(f"🎬 Filtr: {drawtext_filter}")
         
-        # Komenda ffmpeg - BEZ zmiany FPS (fps_mode passthrough)
+        # Komenda ffmpeg
         cmd = [
             "ffmpeg",
             "-i", str(video_path),
@@ -428,7 +674,7 @@ def add_date_overlay_to_video(video_path):
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "23",
-            "-fps_mode", "passthrough",  # Nie zmieniaj FPS!
+            "-fps_mode", "passthrough",
             "-c:a", "copy",
             "-y",
             str(temp_file)
@@ -498,6 +744,12 @@ def init_menu_tiles():
             "title": "Znacznik Daty",
             "icon": "📅",
             "description": "Data na filmie"
+        },
+        {
+            "id": "battery",
+            "title": "Poziom Baterii",
+            "icon": "🔋",
+            "description": "Testowy poziom baterii"
         }
     ]
 
@@ -542,6 +794,15 @@ def init_submenu(tile_id):
             {"type": "text", "label": "Ręczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
             {"type": "spacer"},
             {"type": "button", "label": "🔄 RESET USTAWIEŃ", "action": "reset_section"},
+        ]
+
+    elif tile_id == "battery":
+        submenu_items = [
+            {"type": "header", "text": "🔋 POZIOM BATERII"},
+            {"type": "spacer"},
+            {"type": "battery_slider", "label": "Fikcyjny poziom", "key": "fake_battery", "min": 0, "max": 100, "step": 5},
+            {"type": "spacer"},
+            {"type": "button", "label": "🔄 UŻYJ RZECZYWISTEGO", "action": "reset_battery"},
         ]
 
 
@@ -618,14 +879,17 @@ def menu_navigate_up():
 
 def submenu_navigate_up():
     """Nawigacja w górę w submenu"""
-    global submenu_selected
-    
+    global submenu_selected, fake_battery_level
+
     if submenu_editing:
         item = submenu_items[submenu_selected]
         if item["type"] == "slider":
             key = item["key"]
             camera_settings[key] = min(item["max"], camera_settings[key] + item["step"])
             apply_camera_settings()
+        elif item["type"] == "battery_slider":
+            current_level = fake_battery_level if fake_battery_level is not None else 100
+            fake_battery_level = min(item["max"], current_level + item["step"])
         elif item["type"] == "select":
             key = item["key"]
             options = item["options"]
@@ -641,14 +905,17 @@ def submenu_navigate_up():
 
 def submenu_navigate_down():
     """Nawigacja w dół w submenu"""
-    global submenu_selected
-    
+    global submenu_selected, fake_battery_level
+
     if submenu_editing:
         item = submenu_items[submenu_selected]
         if item["type"] == "slider":
             key = item["key"]
             camera_settings[key] = max(item["min"], camera_settings[key] - item["step"])
             apply_camera_settings()
+        elif item["type"] == "battery_slider":
+            current_level = fake_battery_level if fake_battery_level is not None else 100
+            fake_battery_level = max(item["min"], current_level - item["step"])
         elif item["type"] == "select":
             key = item["key"]
             options = item["options"]
@@ -676,13 +943,16 @@ def submenu_ok():
                 reset_manual_settings()
             elif current_submenu == "date":
                 reset_date_settings()
-    
+        elif item["action"] == "reset_battery":
+            global fake_battery_level
+            fake_battery_level = None
+
     elif item["type"] == "toggle":
         key = item["key"]
         camera_settings[key] = not camera_settings[key]
         save_config()
-    
-    elif item["type"] in ["slider", "select"]:
+
+    elif item["type"] in ["slider", "select", "battery_slider"]:
         submenu_editing = not submenu_editing
     
     elif item["type"] == "text":
@@ -814,29 +1084,56 @@ def draw_submenu_screen(frame):
         
         elif item["type"] == "slider":
             is_selected = (actual_idx == submenu_selected)
-            
+
             if is_selected:
-                pygame.draw.rect(screen, BLUE if not submenu_editing else ORANGE, 
+                pygame.draw.rect(screen, BLUE if not submenu_editing else ORANGE,
                                (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
-            
+
             label_color = YELLOW if is_selected else WHITE
             draw_text(item["label"], font_small, label_color, menu_x + 40, y + 10)
-            
+
             value = camera_settings[item["key"]]
             value_text = f"{value:.1f}"
             draw_text(value_text, font_small, GREEN if is_selected else GRAY, menu_x + menu_width - 250, y + 10)
-            
+
             bar_x = menu_x + menu_width - 200
             bar_y = y + 20
             bar_width = 150
             bar_height = 10
-            
+
             pygame.draw.rect(screen, GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
-            
+
             fill_ratio = (value - item["min"]) / (item["max"] - item["min"])
             fill_width = int(bar_width * fill_ratio)
             pygame.draw.rect(screen, GREEN, (bar_x, bar_y, fill_width, bar_height), border_radius=5)
-            
+
+            y += item_height
+
+        elif item["type"] == "battery_slider":
+            is_selected = (actual_idx == submenu_selected)
+
+            if is_selected:
+                pygame.draw.rect(screen, BLUE if not submenu_editing else ORANGE,
+                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
+
+            label_color = YELLOW if is_selected else WHITE
+            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 10)
+
+            value = fake_battery_level if fake_battery_level is not None else 100
+            value_text = f"{value}%" if fake_battery_level is not None else "AUTO"
+            draw_text(value_text, font_small, GREEN if is_selected else GRAY, menu_x + menu_width - 250, y + 10)
+
+            bar_x = menu_x + menu_width - 200
+            bar_y = y + 20
+            bar_width = 150
+            bar_height = 10
+
+            pygame.draw.rect(screen, GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
+
+            fill_ratio = (value - item["min"]) / (item["max"] - item["min"])
+            fill_width = int(bar_width * fill_ratio)
+            pygame.draw.rect(screen, GREEN, (bar_x, bar_y, fill_width, bar_height), border_radius=5)
+
             y += item_height
         
         elif item["type"] == "select":
@@ -949,105 +1246,124 @@ def draw_grid_overlay():
     screen.blit(grid_surface, (0, 0))
 
 
+def get_battery_level():
+    """Odczytaj poziom naładowania baterii (0-100)"""
+    # Jeśli ustawiono fikcyjny poziom baterii, użyj go
+    if fake_battery_level is not None:
+        return fake_battery_level
+
+    try:
+        # Próba odczytu z systemu Linux (Raspberry Pi)
+        with open('/sys/class/power_supply/BAT0/capacity', 'r') as f:
+            return int(f.read().strip())
+    except:
+        try:
+            # Alternatywna ścieżka dla niektórych systemów
+            with open('/sys/class/power_supply/BAT1/capacity', 'r') as f:
+                return int(f.read().strip())
+        except:
+            # Jeśli nie można odczytać, zwróć 100% (pełna bateria jako domyślna)
+            return 100
+
+
 def draw_battery_icon():
-    """Rysuj poziomo odbitą (patrzącą w lewo) i lekko zmniejszoną ikonę baterii."""
-    scale = 1  # lekkie zmniejszenie
-
-    # oryginalne wymiary/przesunięcia * przed skalowaniem
-    orig_battery_x = SCREEN_WIDTH - 100
-    orig_battery_y = 20
-    orig_battery_width = 60
-    orig_battery_height = 28
-
-    # skalowane wartości
-    battery_x = int(orig_battery_x * scale)
-    battery_y = int(orig_battery_y * scale)
-    battery_width = int(orig_battery_width * scale)
-    battery_height = int(orig_battery_height * scale)
-
-    # oś odbicia poziomego (środek baterii przed odbiciem)
-    flip_center_x = battery_x + battery_width // 2
-
-    def flip_x(x, w=0):
-        # zwraca lewy współrzędny po odbiciu poziomym względem flip_center_x
-        # jeśli podamy szerokość w, zostanie uwzględniona (x jest lewym rogiem)
-        return 2 * flip_center_x - x - w
-
-    # Obrys baterii (czarny, cienki)
-    outline_rect = (battery_x - 2, battery_y - 2, battery_width + 4, battery_height + 4)
-    # flipujemy rect: obliczamy nowy x z uwzględnieniem szerokości
-    o_x = flip_x(outline_rect[0], outline_rect[2])
+    """Rysuj ikonę baterii z 4 segmentami"""
+    # Pozycja i rozmiar baterii
+    battery_x = SCREEN_WIDTH - 100
+    battery_y = 20
+    battery_width = 60
+    battery_height = 28
+    
+    # Czarne tło pod baterią (outline)
+    outline_padding = 2
     pygame.draw.rect(screen, BLACK,
-                     (o_x, outline_rect[1], outline_rect[2], outline_rect[3]),
+                     (battery_x - outline_padding, battery_y - outline_padding,
+                      battery_width + outline_padding * 2, battery_height + outline_padding * 2),
                      border_radius=4)
-
-    # Rama baterii (biała)
-    frame_rect = (battery_x, battery_y, battery_width, battery_height)
-    f_x = flip_x(frame_rect[0], frame_rect[2])
+    
+    # Główna ramka baterii (biała)
     pygame.draw.rect(screen, WHITE,
-                     (f_x, frame_rect[1], frame_rect[2], frame_rect[3]),
+                     (battery_x, battery_y, battery_width, battery_height),
                      3, border_radius=4)
-
-    # Końcówka baterii (tip) - oryginalnie po prawej, po odbiciu będzie po lewej
-    tip_width = int(6 * scale)
-    tip_height = int(12 * scale)
-    tip_x = battery_x + battery_width  # oryginalne: koniec po prawej
-    tip_y = battery_y + int(8 * scale)
-
-    # Po odbiciu końcówka znajdzie się po lewej stronie obudowy -> flip_x z szerokością tip
-    tip_rect_outline_x = flip_x(tip_x - 1, tip_width + 2)
-    pygame.draw.rect(screen, BLACK, (tip_rect_outline_x, tip_y - 1, tip_width + 2, tip_height + 2))
-    tip_rect_x = flip_x(tip_x, tip_width)
-    pygame.draw.rect(screen, WHITE, (tip_rect_x, tip_y, tip_width, tip_height))
-
-    # Segmenty
-    segment_width = int(8 * scale)
-    segment_height = battery_height - int(10 * scale)
-    segment_spacing = int(2 * scale)
-    segment_x_start = battery_x + int(6 * scale)
-    segment_y = battery_y + int(5 * scale)
-
-    angle = 30
-    top_offset = segment_height * math.tan(math.radians(angle)) / 2
-
-    for i in range(4):
-        segment_x = segment_x_start + i * (segment_width + segment_spacing)
-
-        # punkty równoległoboku (przed odbiciem)
-        p = [
-            (segment_x + top_offset, segment_y),
-            (segment_x + segment_width + top_offset, segment_y),
-            (segment_x + segment_width - top_offset, segment_y + segment_height),
-            (segment_x - top_offset, segment_y + segment_height)
-        ]
-
-        # odbicie poziome punktów względem flip_center_x
-        points = [ (flip_x(x), y) for (x, y) in p ]
-
-        # Outline (drobne przesunięcia konturu - tu też x są już po flipie)
-        outline_points = [
-            (points[0][0] - 1, points[0][1] - 1),
-            (points[1][0] + 1, points[1][1] - 1),
-            (points[2][0] + 1, points[2][1] + 1),
-            (points[3][0] - 1, points[3][1] + 1)
-        ]
-        pygame.draw.polygon(screen, BLACK, outline_points)
-        pygame.draw.polygon(screen, WHITE, points)
-
-
+    
+    # Końcówka baterii (po lewej)
+    tip_width = 6
+    tip_height = 12
+    tip_x = battery_x - tip_width
+    tip_y = battery_y + (battery_height - tip_height) // 2
+    
+    # Czarne tło pod końcówką
+    pygame.draw.rect(screen, BLACK,
+                     (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
+    
+    # Biała końcówka
+    pygame.draw.rect(screen, WHITE,
+                     (tip_x, tip_y, tip_width, tip_height))
+    
+    # Ustawienia segmentów
+    segment_width = 10
+    segment_height = battery_height - 8  # Margines 4px góra i dół
+    segment_spacing = 3
+    segments_start_x = battery_x + battery_width - 6 - segment_width  # Margines od prawej krawędzi
+    segment_y = battery_y + 4  # Margines od góry
+    
+    # Pobierz poziom baterii i oblicz ile segmentów pokazać
+    battery_level = get_battery_level()
+    if battery_level >= 75:
+        segments_to_draw = 4
+    elif battery_level >= 50:
+        segments_to_draw = 3
+    elif battery_level >= 25:
+        segments_to_draw = 2
+    else:
+        segments_to_draw = 1
+    
+    # Ustaw clipping na wewnętrzną część baterii (żeby segmenty nie wychodziły poza ramkę)
+    clip_margin = 3
+    clip_rect = pygame.Rect(
+        battery_x + clip_margin,
+        battery_y + clip_margin,
+        battery_width - clip_margin * 2,
+        battery_height - clip_margin * 2
+    )
+    screen.set_clip(clip_rect)
+    
+    # Rysuj segmenty
+    for i in range(segments_to_draw):
+        segment_x = segments_start_x - i * (segment_width + segment_spacing)
+        
+        # Czarne tło pod segmentem (outline)
+        outline_rect = pygame.Rect(
+            segment_x - 1,
+            segment_y - 1,
+            segment_width + 2,
+            segment_height + 2
+        )
+        pygame.draw.rect(screen, BLACK, outline_rect)
+        
+        # Biały segment
+        segment_rect = pygame.Rect(
+            segment_x,
+            segment_y,
+            segment_width,
+            segment_height
+        )
+        pygame.draw.rect(screen, WHITE, segment_rect)
+    
+    # Wyłącz clipping
+    screen.set_clip(None)
 
 
 def draw_zoom_bar():
     """Rysuj pasek zoom W/T - tylko gdy aktywny"""
     current_time = time.time()
     
-    # Sprawdź czy minęła sekunda od ostatniej zmiany zoomu
     if current_time - last_zoom_change_time > ZOOM_BAR_TIMEOUT:
-        return  # Nie rysuj jeśli timeout minął
+        return
     
     bar_width = 300
     bar_height = 30
-    bar_x = (SCREEN_WIDTH - bar_width) // 2
+    bar_x = SCREEN_WIDTH - 450
     bar_y = 20
     
     bg_surface = pygame.Surface((bar_width, bar_height), pygame.SRCALPHA)
@@ -1082,27 +1398,39 @@ def draw_zoom_bar():
 
 def draw_recording_indicator():
     """Rysuj wskaźnik nagrywania lub STBY"""
-    rec_x = 30
+    rec_x = 585  
     rec_y = 30
-    
+
     if recording and recording_start_time:
-        # Tryb nagrywania
         elapsed_time = time.time() - recording_start_time
         hours = int(elapsed_time // 3600)
         minutes = int((elapsed_time % 3600) // 60)
         seconds = int(elapsed_time % 60)
         milliseconds = int((elapsed_time % 1) * 100)
         time_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}:{milliseconds:02d}"
-        
+
         if int(pygame.time.get_ticks() / 500) % 2:
             pygame.draw.circle(screen, RED, (rec_x + 10, rec_y + 15), 8)
-        
+
         draw_text_with_outline("REC", font_medium, RED, BLACK, rec_x + 30, rec_y)
         draw_text_with_outline(time_text, font_medium, RED, BLACK, rec_x + 95, rec_y)
     else:
-        # Tryb gotowości (STBY)
         draw_text_with_outline("STBY", font_large, GREEN, BLACK, rec_x, rec_y)
-        
+
+
+def draw_menu_button():
+    """Rysuj przycisk informujący o możliwości otwarcia menu w lewym górnym rogu"""
+    button_width = 100
+    button_height = 50
+    button_x = 20
+    button_y = 20
+
+    # Rysuj tło przycisku
+    pygame.draw.rect(screen, DARK_GRAY, (button_x, button_y, button_width, button_height), border_radius=10)
+    pygame.draw.rect(screen, BLUE, (button_x, button_y, button_width, button_height), 3, border_radius=10)
+
+    # Rysuj tekst na przycisku
+    draw_text_with_outline("MENU", font_medium, WHITE, BLACK, button_x + button_width // 2, button_y + button_height // 2, center=True)
 
 
 def generate_thumbnail(video_path, max_retries=3):
@@ -1259,7 +1587,7 @@ def get_display_date():
 
 
 def draw_date_overlay():
-    """Rysuj overlay daty na podglądzie na żywo (NIE na nagraniu)"""
+    """Rysuj overlay daty na podglądzie"""
     if not camera_settings.get("show_date", False):
         return
     
@@ -1334,6 +1662,9 @@ def init_pygame():
     screen.fill(BLACK)
     pygame.display.flip()
     
+    # Wczytaj ikony SD
+    load_sd_icons()
+    
     print("✅ Pygame OK")
 
 
@@ -1360,7 +1691,7 @@ def init_camera():
 
 
 # ============================================================================
-# NAGRYWANIE - Z FPS W NAZWIE PLIKU!
+# NAGRYWANIE
 # ============================================================================
 
 def start_recording():
@@ -1371,14 +1702,16 @@ def start_recording():
         current_recording_fps = get_current_fps()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # ⚠️ KLUCZOWE: FPS w nazwie pliku!
         current_file = VIDEO_DIR / f"video_{timestamp}_{current_recording_fps}fps.mp4"
         
         print(f"🔴 START: {current_file.name}")
         print(f"🎬 FPS: {current_recording_fps}")
         
         try:
-            encoder = H264Encoder(bitrate=10000000, framerate=current_recording_fps)
+            resolution = camera_settings.get("video_resolution", "1080p30")
+            bitrate = BITRATE_MAP.get(resolution, 10000000)
+            
+            encoder = H264Encoder(bitrate=bitrate, framerate=current_recording_fps)
             output = FfmpegOutput(str(current_file))
             camera.start_encoder(encoder, output)
             recording = True
@@ -1416,7 +1749,6 @@ def stop_recording():
                 else:
                     print(f"✅ Zapisano: {size:.1f} MB @ {saved_fps} FPS")
                     
-                    # Weryfikacja FPS
                     verify_cap = cv2.VideoCapture(str(saved_file))
                     recorded_fps = verify_cap.get(cv2.CAP_PROP_FPS)
                     verify_cap.release()
@@ -1451,7 +1783,7 @@ def stop_recording():
 
 
 # ============================================================================
-# ODTWARZANIE - UŻYWA FPS Z NAZWY PLIKU!
+# ODTWARZANIE
 # ============================================================================
 
 def start_video_playback(video_path):
@@ -1466,10 +1798,8 @@ def start_video_playback(video_path):
         print("❌ Nie można otworzyć")
         return False
     
-    # ⚠️ KLUCZOWE: Najpierw spróbuj FPS z nazwy pliku!
     video_fps = extract_fps_from_filename(video_path.name)
     
-    # Jeśli nie ma w nazwie, użyj OpenCV
     if not video_fps:
         video_fps = video_capture.get(cv2.CAP_PROP_FPS)
         print(f"📊 OpenCV FPS: {video_fps}")
@@ -1587,12 +1917,12 @@ def draw_main_screen(frame):
     draw_grid_overlay()
     draw_date_overlay()
     draw_battery_icon()
+    draw_sd_card_info()
     draw_zoom_bar()
-    
     draw_recording_indicator()
-        
-    
-    draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom", 
+    draw_menu_button()
+
+    draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
              font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
 
@@ -1659,7 +1989,6 @@ def draw_videos_screen():
             draw_text(f"📊 {size:.1f} MB", font_tiny, info_color, info_x, y_offset + 90)
             draw_text(f"📅 {date_str}", font_tiny, info_color, info_x, y_offset + 120)
             
-            # Pokazuj FPS z nazwy pliku
             fps_from_name = extract_fps_from_filename(video.name)
             if fps_from_name:
                 draw_text(f"🎬 {fps_from_name} FPS", font_tiny, GREEN if i == selected_index else GRAY, 
@@ -1769,7 +2098,6 @@ def draw_playing_screen():
     time_text = f"{format_time(current_time_sec)} / {format_time(total_time_sec)}"
     draw_text(time_text, font_small, WHITE, SCREEN_WIDTH // 2, progress_y + 35, center=True)
     
-    # Pokazuj FPS odtwarzania
     fps_text = f"🎬 {video_fps} FPS"
     draw_text(fps_text, font_tiny, GREEN, SCREEN_WIDTH - 150, panel_y + 20)
     
