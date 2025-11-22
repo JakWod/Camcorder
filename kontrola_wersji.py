@@ -63,6 +63,8 @@ STATE_CONFIRM = 2
 STATE_PLAYING = 3
 STATE_MENU = 4
 STATE_SUBMENU = 5
+STATE_VIDEO_CONTEXT_MENU = 6
+STATE_VIDEO_INFO = 7
 
 # Globalne zmienne
 camera = None
@@ -91,6 +93,11 @@ video_last_surface = None
 videos = []
 selected_index = 0
 thumbnails = {}
+videos_scroll_offset = 0
+selected_videos = set()  # Multi-select: zestaw indeksów zaznaczonych filmów
+video_context_menu_selection = 0  # Wybór w menu kontekstowym
+video_info_index = 0  # Indeks filmu do wyświetlenia informacji
+multi_select_mode = False  # Tryb zaznaczania wielu filmów
 
 # Pygame
 font_large = None
@@ -180,10 +187,10 @@ def find_icon_file(base_name):
     for ext in extensions:
         path = VIDEO_DIR / f"{base_name}{ext}"
         if path.exists():
-            print(f"✅ Znaleziono ikonę: {path.name}")
+            print(f"[OK] Znaleziono ikonę: {path.name}")
             return path
     
-    print(f"⚠️  Nie znaleziono ikony: {base_name}")
+    print(f"[WARN] Nie znaleziono ikony: {base_name}")
     return None
 
 
@@ -245,19 +252,19 @@ def load_sd_icons():
     icon_size = (60, 60)
     
     print("\n" + "="*60)
-    print("🔄 ŁADOWANIE IKON SD CARD")
+    print("[INFO] ŁADOWANIE IKON SD CARD")
     print("="*60)
-    print(f"📁 Katalog: {VIDEO_DIR}")
+    print(f"[DIR] Katalog: {VIDEO_DIR}")
     
     # Lista wszystkich plików w katalogu (dla diagnostyki)
     try:
         all_files = list(VIDEO_DIR.glob("*"))
-        print(f"📋 Pliki w katalogu ({len(all_files)}):")
+        print(f"[LIST] Pliki w katalogu ({len(all_files)}):")
         for f in all_files[:15]:  # Pokaż pierwsze 15
             if f.is_file():
                 print(f"   - {f.name}")
     except Exception as e:
-        print(f"⚠️  Nie można listować plików: {e}")
+        print(f"[WARN] Nie można listować plików: {e}")
     
     print()
     
@@ -266,7 +273,7 @@ def load_sd_icons():
     
     if SD_ICON_FILE and SD_ICON_FILE.exists():
         try:
-            print(f"📂 Wczytywanie: {SD_ICON_FILE}")
+            print(f"[LOAD] Wczytywanie: {SD_ICON_FILE}")
             print(f"   Rozmiar pliku: {SD_ICON_FILE.stat().st_size} bajtów")
             
             sd_img = pygame.image.load(str(SD_ICON_FILE))
@@ -274,14 +281,14 @@ def load_sd_icons():
             print(f"   Oryginalny rozmiar: {original_size}")
             
             sd_icon_surface = pygame.transform.smoothscale(sd_img, icon_size)
-            print(f"✅ Ikona SD wczytana i przeskalowana do {icon_size}")
+            print(f"[OK] Ikona SD wczytana i przeskalowana do {icon_size}")
             
         except Exception as e:
-            print(f"❌ Błąd wczytywania {SD_ICON_FILE.name}: {e}")
+            print(f"[ERROR] Błąd wczytywania {SD_ICON_FILE.name}: {e}")
             print(f"   Tworzę ikonę zastępczą...")
             sd_icon_surface = create_fallback_sd_icon(icon_size, True)
     else:
-        print(f"⚠️  Brak pliku ikony SD - używam ikony zastępczej")
+        print(f"[WARN] Brak pliku ikony SD - używam ikony zastępczej")
         sd_icon_surface = create_fallback_sd_icon(icon_size, True)
     
     print()
@@ -291,7 +298,7 @@ def load_sd_icons():
     
     if NO_SD_ICON_FILE and NO_SD_ICON_FILE.exists():
         try:
-            print(f"📂 Wczytywanie: {NO_SD_ICON_FILE}")
+            print(f"[LOAD] Wczytywanie: {NO_SD_ICON_FILE}")
             print(f"   Rozmiar pliku: {NO_SD_ICON_FILE.stat().st_size} bajtów")
             
             no_sd_img = pygame.image.load(str(NO_SD_ICON_FILE))
@@ -299,19 +306,19 @@ def load_sd_icons():
             print(f"   Oryginalny rozmiar: {original_size}")
             
             no_sd_icon_surface = pygame.transform.smoothscale(no_sd_img, icon_size)
-            print(f"✅ Ikona NO SD wczytana i przeskalowana do {icon_size}")
+            print(f"[OK] Ikona NO SD wczytana i przeskalowana do {icon_size}")
             
         except Exception as e:
-            print(f"❌ Błąd wczytywania {NO_SD_ICON_FILE.name}: {e}")
+            print(f"[ERROR] Błąd wczytywania {NO_SD_ICON_FILE.name}: {e}")
             print(f"   Tworzę ikonę zastępczą...")
             no_sd_icon_surface = create_fallback_sd_icon(icon_size, False)
     else:
-        print(f"⚠️  Brak pliku ikony NO SD - używam ikony zastępczej")
+        print(f"[WARN] Brak pliku ikony NO SD - używam ikony zastępczej")
         no_sd_icon_surface = create_fallback_sd_icon(icon_size, False)
     
     print()
     print("="*60)
-    print("✅ IKONY SD GOTOWE")
+    print("[OK] IKONY SD GOTOWE")
     print("="*60 + "\n")
 
 
@@ -415,9 +422,9 @@ def extract_fps_from_filename(filename):
     match = re.search(r'_(\d+)fps', str(filename))
     if match:
         fps = int(match.group(1))
-        print(f"📊 FPS z nazwy pliku: {fps}")
+        print(f"[FPS] FPS z nazwy pliku: {fps}")
         return fps
-    print(f"⚠️  Brak FPS w nazwie, użyję domyślnego")
+    print(f"[WARN] Brak FPS w nazwie, użyję domyślnego")
     return None
 
 
@@ -433,11 +440,11 @@ def load_config():
             with open(CONFIG_FILE, 'r') as f:
                 loaded = json.load(f)
                 camera_settings.update(loaded)
-            print("✅ Konfiguracja wczytana")
+            print("[OK] Konfiguracja wczytana")
         else:
             save_config()
     except Exception as e:
-        print(f"⚠️  Błąd wczytywania config: {e}")
+        print(f"[WARN] Błąd wczytywania config: {e}")
 
 
 def save_config():
@@ -445,9 +452,9 @@ def save_config():
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(camera_settings, f, indent=2)
-        print("✅ Konfiguracja zapisana")
+        print("[OK] Konfiguracja zapisana")
     except Exception as e:
-        print(f"⚠️  Błąd zapisu config: {e}")
+        print(f"[WARN] Błąd zapisu config: {e}")
 
 
 def reset_to_factory():
@@ -471,7 +478,7 @@ def reset_to_factory():
     }
     save_config()
     apply_camera_settings()
-    print("✅ Reset do ustawień fabrycznych")
+    print("[OK] Reset do ustawień fabrycznych")
 
 
 def reset_quality_settings():
@@ -479,7 +486,7 @@ def reset_quality_settings():
     camera_settings["video_resolution"] = "1080p30"
     save_config()
     apply_camera_settings()
-    print("✅ Reset ustawień jakości")
+    print("[OK] Reset ustawień jakości")
 
 
 def reset_manual_settings():
@@ -493,7 +500,7 @@ def reset_manual_settings():
     camera_settings["awb_mode"] = "auto"
     save_config()
     apply_camera_settings()
-    print("✅ Reset ustawień manualnych")
+    print("[OK] Reset ustawień manualnych")
 
 
 def reset_date_settings():
@@ -503,7 +510,7 @@ def reset_date_settings():
     camera_settings["date_position"] = "top_left"
     camera_settings["manual_date"] = None
     save_config()
-    print("✅ Reset ustawień daty")
+    print("[OK] Reset ustawień daty")
 
 
 def apply_camera_settings():
@@ -540,10 +547,10 @@ def apply_camera_settings():
             apply_zoom(camera_settings["zoom"])
         
         camera.set_controls(controls)
-        print(f"✅ Ustawienia kamery zastosowane")
+        print(f"[OK] Ustawienia kamery zastosowane")
         
     except Exception as e:
-        print(f"⚠️  Błąd ustawiania kamery: {e}")
+        print(f"[WARN] Błąd ustawiania kamery: {e}")
 
 
 def apply_zoom(zoom_level):
@@ -567,7 +574,7 @@ def apply_zoom(zoom_level):
         camera.set_controls({"ScalerCrop": (x, y, crop_width, crop_height)})
         
     except Exception as e:
-        print(f"⚠️  Błąd zoom: {e}")
+        print(f"[WARN] Błąd zoom: {e}")
 
 
 def adjust_zoom(delta):
@@ -585,11 +592,11 @@ def adjust_zoom(delta):
 def add_date_overlay_to_video(video_path):
     """Dodaj overlay daty do video - zachowuje FPS"""
     if not camera_settings.get("show_date", False):
-        print("📅 Data wyłączona - pomijam overlay")
+        print("[DATE] Data wyłączona - pomijam overlay")
         return True
     
     try:
-        print(f"📅 Dodawanie daty do video...")
+        print(f"[DATE] Dodawanie daty do video...")
         
         # Pobierz FPS z nazwy pliku
         original_fps = extract_fps_from_filename(video_path.name)
@@ -603,7 +610,7 @@ def add_date_overlay_to_video(video_path):
         if not original_fps or original_fps <= 0 or original_fps > 120:
             original_fps = get_current_fps()
         
-        print(f"🎬 Używam FPS: {original_fps}")
+        print(f"[VIDEO] Używam FPS: {original_fps}")
         
         # Przygotuj tekst daty
         if camera_settings.get("manual_date"):
@@ -626,7 +633,7 @@ def add_date_overlay_to_video(video_path):
             except:
                 date_text = datetime.now().strftime("%Y-%m-%d")
         
-        print(f"📅 Tekst overlay: {date_text}")
+        print(f"[DATE] Tekst overlay: {date_text}")
         
         # ESCAPOWANIE dla ffmpeg
         date_text_escaped = date_text.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
@@ -664,7 +671,7 @@ def add_date_overlay_to_video(video_path):
             f"y={y}"
         )
         
-        print(f"🎬 Filtr: {drawtext_filter}")
+        print(f"[VIDEO] Filtr: {drawtext_filter}")
         
         # Komenda ffmpeg
         cmd = [
@@ -680,17 +687,17 @@ def add_date_overlay_to_video(video_path):
             str(temp_file)
         ]
         
-        print(f"🎬 Przetwarzanie ffmpeg...")
+        print(f"[VIDEO] Przetwarzanie ffmpeg...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         
         if result.returncode != 0:
-            print(f"⚠️  FFmpeg error: {result.stderr}")
+            print(f"[WARN] FFmpeg error: {result.stderr}")
             if temp_file.exists():
                 temp_file.unlink()
             return False
         
         if not temp_file.exists() or temp_file.stat().st_size < 1000:
-            print(f"⚠️  Plik tymczasowy nieprawidłowy")
+            print(f"[WARN] Plik tymczasowy nieprawidłowy")
             if temp_file.exists():
                 temp_file.unlink()
             return False
@@ -700,17 +707,17 @@ def add_date_overlay_to_video(video_path):
         output_fps = verify_cap.get(cv2.CAP_PROP_FPS)
         verify_cap.release()
         
-        print(f"✅ FPS: {output_fps:.2f} (oczekiwano: {original_fps:.2f})")
+        print(f"[OK] FPS: {output_fps:.2f} (oczekiwano: {original_fps:.2f})")
         
         # Zamiana plików
         video_path.unlink()
         temp_file.rename(video_path)
         
-        print(f"✅ Data dodana pomyślnie")
+        print(f"[OK] Data dodana pomyślnie")
         return True
         
     except Exception as e:
-        print(f"⚠️  Błąd dodawania daty: {e}")
+        print(f"[WARN] Błąd dodawania daty: {e}")
         import traceback
         traceback.print_exc()
         if 'temp_file' in locals() and temp_file.exists():
@@ -730,25 +737,25 @@ def init_menu_tiles():
         {
             "id": "quality",
             "title": "Image Quality/Size",
-            "icon": "🎬",
+            "icon": "[VIDEO]",
             "description": "Rozdzielczość i FPS"
         },
         {
             "id": "manual",
             "title": "Manual Settings",
-            "icon": "⚙️",
+            "icon": "[CONFIG]",
             "description": "Parametry kamery"
         },
         {
             "id": "date",
             "title": "Znacznik Daty",
-            "icon": "📅",
+            "icon": "[DATE]",
             "description": "Data na filmie"
         },
         {
             "id": "battery",
             "title": "Poziom Baterii",
-            "icon": "🔋",
+            "icon": "[BATT]",
             "description": "Testowy poziom baterii"
         }
     ]
@@ -762,17 +769,17 @@ def init_submenu(tile_id):
     
     if tile_id == "quality":
         submenu_items = [
-            {"type": "header", "text": "🎬 IMAGE QUALITY/SIZE"},
+            {"type": "header", "text": "[VIDEO] IMAGE QUALITY/SIZE"},
             {"type": "spacer"},
             {"type": "select", "label": "Rozdzielczość", "key": "video_resolution", "options": VIDEO_RESOLUTIONS},
             {"type": "toggle", "label": "Siatka pomocnicza", "key": "show_grid"},
             {"type": "spacer"},
-            {"type": "button", "label": "🔄 RESET USTAWIEŃ", "action": "reset_section"},
+            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
         ]
     
     elif tile_id == "manual":
         submenu_items = [
-            {"type": "header", "text": "⚙️  MANUAL SETTINGS"},
+            {"type": "header", "text": "[CONFIG] MANUAL SETTINGS"},
             {"type": "spacer"},
             {"type": "select", "label": "White Balance", "key": "awb_mode", "options": WB_MODES},
             {"type": "slider", "label": "Jasność", "key": "brightness", "min": -1.0, "max": 1.0, "step": 0.1},
@@ -781,28 +788,28 @@ def init_submenu(tile_id):
             {"type": "slider", "label": "Ostrość", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
             {"type": "slider", "label": "Ekspozycja", "key": "exposure_compensation", "min": -2.0, "max": 2.0, "step": 0.2},
             {"type": "spacer"},
-            {"type": "button", "label": "🔄 RESET USTAWIEŃ", "action": "reset_section"},
+            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
         ]
     
     elif tile_id == "date":
         submenu_items = [
-            {"type": "header", "text": "📅 ZNACZNIK DATY"},
+            {"type": "header", "text": "[DATE] ZNACZNIK DATY"},
             {"type": "spacer"},
             {"type": "toggle", "label": "Pokaż datę", "key": "show_date"},
             {"type": "toggle", "label": "Pokaż godzinę", "key": "show_time"},
             {"type": "select", "label": "Pozycja daty", "key": "date_position", "options": DATE_POSITIONS},
             {"type": "text", "label": "Ręczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
             {"type": "spacer"},
-            {"type": "button", "label": "🔄 RESET USTAWIEŃ", "action": "reset_section"},
+            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
         ]
 
     elif tile_id == "battery":
         submenu_items = [
-            {"type": "header", "text": "🔋 POZIOM BATERII"},
+            {"type": "header", "text": "[BATT] POZIOM BATERII"},
             {"type": "spacer"},
             {"type": "battery_slider", "label": "Fikcyjny poziom", "key": "fake_battery", "min": 0, "max": 100, "step": 5},
             {"type": "spacer"},
-            {"type": "button", "label": "🔄 UŻYJ RZECZYWISTEGO", "action": "reset_battery"},
+            {"type": "button", "label": "[RESET] UŻYJ RZECZYWISTEGO", "action": "reset_battery"},
         ]
 
 
@@ -813,7 +820,7 @@ def open_menu():
     init_menu_tiles()
     selected_tile = 0
     current_state = STATE_MENU
-    print("\n⚙️  MENU OTWARTE")
+    print("\n[MENU] MENU OTWARTE")
 
 
 def open_submenu(tile_id):
@@ -824,7 +831,7 @@ def open_submenu(tile_id):
     submenu_selected = 2
     submenu_editing = False
     current_state = STATE_SUBMENU
-    print(f"\n📂 Submenu: {tile_id}")
+    print(f"\n[SUBMENU] Submenu: {tile_id}")
 
 
 def close_menu():
@@ -835,7 +842,7 @@ def close_menu():
     apply_camera_settings()
     submenu_editing = False
     current_state = STATE_MAIN
-    print("\n📺 Ekran główny")
+    print("\n[MAIN] Ekran główny")
 
 
 def close_submenu():
@@ -846,7 +853,7 @@ def close_submenu():
     apply_camera_settings()
     submenu_editing = False
     current_state = STATE_MENU
-    print("\n⚙️  Menu główne")
+    print("\n[MENU] Menu główne")
 
 
 def menu_navigate_left():
@@ -986,7 +993,7 @@ def draw_menu_tiles(frame):
     overlay.fill(BLACK)
     screen.blit(overlay, (0, 0))
     
-    draw_text("⚙️  USTAWIENIA", font_large, YELLOW, SCREEN_WIDTH // 2, 60, center=True)
+    draw_text("[CONFIG] USTAWIENIA", font_large, YELLOW, SCREEN_WIDTH // 2, 60, center=True)
     
     tile_width = 350
     tile_height = 250
@@ -1008,7 +1015,7 @@ def draw_menu_tiles(frame):
         
         icon_size = 100
         icon_y = tile_y + 40
-        draw_text(tile["icon"], font_large, WHITE, x + tile_width // 2, icon_y, center=True)
+        draw_text(tile["icon"], font_medium, WHITE, x + tile_width // 2, icon_y, center=True)
         
         title_y = icon_y + 80
         draw_text(tile["title"], font_medium, WHITE if not is_selected else YELLOW, 
@@ -1032,10 +1039,10 @@ def draw_menu_tiles(frame):
         pygame.draw.rect(screen, RED, (reset_x, reset_y, reset_width, reset_height), border_radius=15)
         pygame.draw.rect(screen, WHITE, (reset_x, reset_y, reset_width, reset_height), 2, border_radius=15)
     
-    draw_text("🔄 RESET DO FABRYCZNYCH", font_medium, WHITE, 
+    draw_text("[RESET] RESET DO FABRYCZNYCH", font_medium, WHITE, 
              SCREEN_WIDTH // 2, reset_y + reset_height // 2, center=True)
     
-    instructions = "⬅️➡️ Nawigacja | ⬇️ Reset | OK: Wybierz | MENU: Zamknij"
+    instructions = "Left/Right: Nawigacja | Down: Reset | OK: Wybierz | MENU: Zamknij"
     draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, 
              center=True, bg_color=BLACK, padding=10)
 
@@ -1163,7 +1170,7 @@ def draw_submenu_screen(frame):
             draw_text(item["label"], font_small, label_color, menu_x + 40, y + 15)
             
             value = camera_settings[item["key"]]
-            toggle_text = "✓ TAK" if value else "✗ NIE"
+            toggle_text = "[YES] TAK" if value else "[NO] NIE"
             toggle_color = GREEN if value else RED
             draw_text(toggle_text, font_small, toggle_color, menu_x + menu_width - 200, y + 15)
             
@@ -1209,9 +1216,9 @@ def draw_submenu_screen(frame):
             y += item_height + 10
     
     if submenu_editing:
-        instructions = "⬆️⬇️ : Zmień | OK: Zatwierdź | MENU: Anuluj"
+        instructions = "Up/Down: Zmień | OK: Zatwierdź | MENU: Anuluj"
     else:
-        instructions = "⬆️⬇️ : Nawigacja | OK: Wybierz | MENU: Wróć"
+        instructions = "Up/Down: Nawigacja | OK: Wybierz | MENU: Wróć"
     
     draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, 
              center=True, bg_color=BLACK, padding=10)
@@ -1439,23 +1446,23 @@ def generate_thumbnail(video_path, max_retries=3):
     
     for attempt in range(max_retries):
         try:
-            print(f"🖼️  Miniatura: {video_path.name} (próba {attempt + 1}/{max_retries})")
+            print(f"[THUMB] Miniatura: {video_path.name} (próba {attempt + 1}/{max_retries})")
             
             if not video_path.exists():
-                print(f"⚠️  Plik nie istnieje")
+                print(f"[WARN] Plik nie istnieje")
                 time.sleep(1)
                 continue
             
             file_size = video_path.stat().st_size
             if file_size < 10000:
-                print(f"⚠️  Plik za mały: {file_size} B")
+                print(f"[WARN] Plik za mały: {file_size} B")
                 time.sleep(1)
                 continue
             
             cap = cv2.VideoCapture(str(video_path))
             
             if not cap.isOpened():
-                print(f"⚠️  Nie można otworzyć")
+                print(f"[WARN] Nie można otworzyć")
                 cap.release()
                 time.sleep(1)
                 continue
@@ -1464,12 +1471,12 @@ def generate_thumbnail(video_path, max_retries=3):
             cap.release()
             
             if not ret or frame is None:
-                print(f"⚠️  Nie można pobrać klatki")
+                print(f"[WARN] Nie można pobrać klatki")
                 time.sleep(1)
                 continue
             
             if frame.shape[0] < 10 or frame.shape[1] < 10:
-                print(f"⚠️  Klatka zbyt mała")
+                print(f"[WARN] Klatka zbyt mała")
                 time.sleep(1)
                 continue
             
@@ -1477,44 +1484,48 @@ def generate_thumbnail(video_path, max_retries=3):
             success = cv2.imwrite(str(thumbnail_path), frame_resized)
             
             if not success:
-                print(f"⚠️  Nie można zapisać")
+                print(f"[WARN] Nie można zapisać")
                 time.sleep(1)
                 continue
             
             if thumbnail_path.exists() and thumbnail_path.stat().st_size > 1000:
-                print(f"✅ Miniatura OK")
+                print(f"[OK] Miniatura OK")
                 return True
             else:
-                print(f"⚠️  Miniatura nieprawidłowa")
+                print(f"[WARN] Miniatura nieprawidłowa")
                 if thumbnail_path.exists():
                     thumbnail_path.unlink()
                 time.sleep(1)
                 continue
                 
         except Exception as e:
-            print(f"⚠️  Błąd (próba {attempt + 1}): {e}")
+            print(f"[WARN] Błąd (próba {attempt + 1}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(2)
             continue
     
-    print(f"❌ Nie udało się po {max_retries} próbach")
+    print(f"[ERROR] Nie udało się po {max_retries} próbach")
     return False
 
 
 def refresh_videos():
     """Odśwież listę filmów"""
-    global videos, selected_index, thumbnails
-    
+    global videos, selected_index, thumbnails, selected_videos, multi_select_mode
+
     old_selected = videos[selected_index] if videos and 0 <= selected_index < len(videos) else None
-    
+
     videos = sorted(VIDEO_DIR.glob("*.mp4"), reverse=True)
-    
+
     if old_selected and old_selected in videos:
         selected_index = videos.index(old_selected)
     else:
         selected_index = min(selected_index, max(0, len(videos) - 1))
-    
-    print("🖼️  Ładowanie miniatur...")
+
+    # Wyczyść zaznaczone filmy i wyłącz tryb multi-select przy odświeżeniu (po usunięciu)
+    selected_videos.clear()
+    multi_select_mode = False
+
+    print("[THUMB] Ładowanie miniatur...")
     thumbnails = {}
     for video in videos:
         thumbnail_path = THUMBNAIL_DIR / f"{video.stem}.jpg"
@@ -1526,8 +1537,8 @@ def refresh_videos():
                     surface = pygame.surfarray.make_surface(np.transpose(img_rgb, (1, 0, 2)))
                     thumbnails[video.stem] = surface
             except Exception as e:
-                print(f"⚠️  Błąd {video.stem}: {e}")
-    print(f"✅ {len(thumbnails)} miniatur")
+                print(f"[WARN] Błąd {video.stem}: {e}")
+    print(f"[OK] {len(thumbnails)} miniatur")
 
 
 def draw_text(text, font, color, x, y, center=False, bg_color=None, padding=10):
@@ -1622,17 +1633,35 @@ def format_time(seconds):
 
 
 def videos_navigate_up():
-    """Nawigacja w górę"""
+    """Nawigacja w górę - w układzie siatki"""
     global selected_index
     if videos:
-        selected_index = max(0, selected_index - 1)
+        cols = 3
+        selected_index = max(0, selected_index - cols)
 
 
 def videos_navigate_down():
-    """Nawigacja w dół"""
+    """Nawigacja w dół - w układzie siatki"""
     global selected_index
     if videos:
-        selected_index = min(len(videos) - 1, selected_index + 1)
+        cols = 3
+        selected_index = min(len(videos) - 1, selected_index + cols)
+
+
+def videos_navigate_left():
+    """Nawigacja w lewo - w układzie siatki"""
+    global selected_index
+    if videos:
+        if selected_index % 3 != 0:  # Jeśli nie jest w pierwszej kolumnie
+            selected_index = max(0, selected_index - 1)
+
+
+def videos_navigate_right():
+    """Nawigacja w prawo - w układzie siatki"""
+    global selected_index
+    if videos:
+        if selected_index % 3 != 2 and selected_index + 1 < len(videos):  # Jeśli nie jest w ostatniej kolumnie
+            selected_index = min(len(videos) - 1, selected_index + 1)
 
 
 # ============================================================================
@@ -1643,7 +1672,7 @@ def init_pygame():
     """Inicjalizuj pygame"""
     global screen, font_large, font_medium, font_small, font_tiny, SCREEN_WIDTH, SCREEN_HEIGHT
     
-    print("🔄 Pygame init...")
+    print("[INIT] Pygame init...")
     pygame.init()
     
     info = pygame.display.Info()
@@ -1665,13 +1694,13 @@ def init_pygame():
     # Wczytaj ikony SD
     load_sd_icons()
     
-    print("✅ Pygame OK")
+    print("[OK] Pygame OK")
 
 
 def init_camera():
     """Inicjalizuj kamerę"""
     global camera
-    print("🔄 Kamera init...")
+    print("[INIT] Kamera init...")
     
     resolution = camera_settings.get("video_resolution", "1080p30")
     res_config = RESOLUTION_MAP[resolution]
@@ -1687,7 +1716,7 @@ def init_camera():
     load_config()
     apply_camera_settings()
     
-    print(f"✅ Kamera OK: {resolution}")
+    print(f"[OK] Kamera OK: {resolution}")
 
 
 # ============================================================================
@@ -1704,8 +1733,8 @@ def start_recording():
         
         current_file = VIDEO_DIR / f"video_{timestamp}_{current_recording_fps}fps.mp4"
         
-        print(f"🔴 START: {current_file.name}")
-        print(f"🎬 FPS: {current_recording_fps}")
+        print(f"[REC] START: {current_file.name}")
+        print(f"[VIDEO] FPS: {current_recording_fps}")
         
         try:
             resolution = camera_settings.get("video_resolution", "1080p30")
@@ -1716,9 +1745,9 @@ def start_recording():
             camera.start_encoder(encoder, output)
             recording = True
             recording_start_time = time.time()
-            print(f"✅ Nagrywanie @ {current_recording_fps} FPS")
+            print(f"[OK] Nagrywanie @ {current_recording_fps} FPS")
         except Exception as e:
-            print(f"❌ Błąd start: {e}")
+            print(f"[ERROR] Błąd start: {e}")
             recording = False
             current_file = None
             current_recording_fps = None
@@ -1730,14 +1759,14 @@ def stop_recording():
     global recording, current_file, encoder, recording_start_time, current_recording_fps
     
     if recording:
-        print("⏹️  STOP...")
+        print("[STOP] STOP...")
         recording = False
         saved_file = current_file
         saved_fps = current_recording_fps
         
         try:
             camera.stop_encoder()
-            print("✅ Encoder zatrzymany")
+            print("[OK] Encoder zatrzymany")
             
             time.sleep(1.5)
             
@@ -1745,33 +1774,33 @@ def stop_recording():
                 size = saved_file.stat().st_size / (1024*1024)
                 
                 if size < 0.1:
-                    print(f"⚠️  Plik zbyt mały ({size:.1f} MB)")
+                    print(f"[WARN] Plik zbyt mały ({size:.1f} MB)")
                 else:
-                    print(f"✅ Zapisano: {size:.1f} MB @ {saved_fps} FPS")
+                    print(f"[OK] Zapisano: {size:.1f} MB @ {saved_fps} FPS")
                     
                     verify_cap = cv2.VideoCapture(str(saved_file))
                     recorded_fps = verify_cap.get(cv2.CAP_PROP_FPS)
                     verify_cap.release()
-                    print(f"📊 OpenCV wykrył FPS: {recorded_fps:.2f}")
+                    print(f"[FPS] OpenCV wykrył FPS: {recorded_fps:.2f}")
                     
-                    print("🖼️  Generowanie miniatury...")
+                    print("[THUMB] Generowanie miniatury...")
                     generate_thumbnail(saved_file)
                     
                     if camera_settings.get("show_date", False):
                         def process_video():
-                            print("📅 Dodawanie daty...")
+                            print("[DATE] Dodawanie daty...")
                             add_date_overlay_to_video(saved_file)
-                            print("✅ Przetwarzanie zakończone")
+                            print("[OK] Przetwarzanie zakończone")
                         
                         thread = threading.Thread(target=process_video, daemon=True)
                         thread.start()
                     else:
-                        print("✅ Przetwarzanie zakończone")
+                        print("[OK] Przetwarzanie zakończone")
             else:
-                print(f"❌ Plik nie istnieje")
+                print(f"[ERROR] Plik nie istnieje")
                 
         except Exception as e:
-            print(f"❌ Błąd: {e}")
+            print(f"[ERROR] Błąd: {e}")
             import traceback
             traceback.print_exc()
         
@@ -1791,24 +1820,24 @@ def start_video_playback(video_path):
     global video_capture, video_current_frame, video_total_frames, video_fps
     global video_path_playing, video_paused, current_state, video_last_frame_time, video_last_surface
     
-    print(f"\n▶️  ODTWARZANIE: {video_path.name}")
+    print(f"\n[PLAY] ODTWARZANIE: {video_path.name}")
     
     video_capture = cv2.VideoCapture(str(video_path))
     if not video_capture.isOpened():
-        print("❌ Nie można otworzyć")
+        print("[ERROR] Nie można otworzyć")
         return False
     
     video_fps = extract_fps_from_filename(video_path.name)
     
     if not video_fps:
         video_fps = video_capture.get(cv2.CAP_PROP_FPS)
-        print(f"📊 OpenCV FPS: {video_fps}")
+        print(f"[FPS] OpenCV FPS: {video_fps}")
     
     if video_fps <= 0 or video_fps > 120:
         video_fps = 30
-        print(f"⚠️  FPS nieprawidłowy, użyto 30")
+        print(f"[WARN] FPS nieprawidłowy, użyto 30")
     
-    print(f"✅ UŻYWAM FPS: {video_fps}")
+    print(f"[OK] UŻYWAM FPS: {video_fps}")
     
     video_total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     video_current_frame = 0
@@ -1818,7 +1847,7 @@ def start_video_playback(video_path):
     video_last_surface = None
     
     current_state = STATE_PLAYING
-    print(f"✅ Wideo: {video_total_frames} klatek @ {video_fps} FPS")
+    print(f"[OK] Wideo: {video_total_frames} klatek @ {video_fps} FPS")
     return True
 
 
@@ -1833,7 +1862,7 @@ def stop_video_playback():
     video_path_playing = None
     video_last_surface = None
     current_state = STATE_VIDEOS
-    print("⏹️  Zatrzymano")
+    print("[STOP] Zatrzymano")
 
 
 def toggle_pause():
@@ -1842,7 +1871,7 @@ def toggle_pause():
     video_paused = not video_paused
     if not video_paused:
         video_last_frame_time = time.time()
-    print(f"{'⏸️  Pauza' if video_paused else '▶️  Wznowiono'}")
+    print(f"{'[PAUSE] Pauza' if video_paused else '[PLAY] Wznowiono'}")
 
 
 def seek_video(seconds):
@@ -1893,7 +1922,7 @@ def seek_video(seconds):
         video_paused = was_paused
 
     except Exception as e:
-        print(f"❌ Błąd seek: {e}")
+        print(f"[ERROR] Błąd seek: {e}")
         video_paused = was_paused
 
 
@@ -1912,100 +1941,277 @@ def draw_main_screen(frame):
             frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
             screen.blit(frame_surface, (0, 0))
         except:
-            draw_text("📹 Kamera", font_large, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
+            draw_text("[CAM] Kamera", font_large, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
     
     draw_grid_overlay()
     draw_date_overlay()
     draw_battery_icon()
-    draw_sd_card_info()
+
+    # Ukryj elementy UI podczas nagrywania
+    if not recording:
+        draw_sd_card_info()
+        draw_menu_button()
+        draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
+                 font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
+
     draw_zoom_bar()
     draw_recording_indicator()
-    draw_menu_button()
-
-    draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
-             font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
 
 def draw_videos_screen():
-    """Ekran listy filmów"""
+    """Ekran listy filmów - układ siatki z miniaturkami"""
+    global videos_scroll_offset
     screen.fill(BLACK)
-    
+
     header_height = 100
     pygame.draw.rect(screen, DARK_GRAY, (0, 0, SCREEN_WIDTH, header_height))
-    draw_text("📹 NAGRANE FILMY", font_large, WHITE, SCREEN_WIDTH // 2, 50, center=True)
-    
+
+    # Nagłówek z wskaźnikiem trybu multi-select
+    if multi_select_mode:
+        draw_text("[VIDEOS] NAGRANE FILMY - TRYB ZAZNACZANIA", font_large, YELLOW, SCREEN_WIDTH // 2, 50, center=True)
+    else:
+        draw_text("[VIDEOS] NAGRANE FILMY", font_large, WHITE, SCREEN_WIDTH // 2, 50, center=True)
+
     if not videos:
-        draw_text("📭 Brak filmów", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
+        draw_text("[EMPTY] Brak filmów", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
         draw_text("Zamknij i naciśnij Record", font_small, DARK_GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
     else:
-        y_offset = header_height + 30
-        row_height = 200
-        visible_count = (SCREEN_HEIGHT - header_height - 150) // row_height
-        
-        start_idx = max(0, selected_index - visible_count // 2)
-        end_idx = min(len(videos), start_idx + visible_count)
-        
-        for i in range(start_idx, end_idx):
+        # Ustawienia siatki
+        cols = 3
+        spacing_x = 30
+        spacing_y = 30
+        start_x = 20
+        start_y = header_height + 30
+
+        # Scrollbar
+        scrollbar_width = 15
+        scrollbar_margin = 20
+
+        # Oblicz dynamicznie szerokość miniaturek żeby wypełnić ekran
+        available_width = SCREEN_WIDTH - start_x - scrollbar_width - scrollbar_margin - 20  # 20 = margines prawy
+        thumb_width = int((available_width - (cols - 1) * spacing_x) / cols)
+        thumb_height = int(thumb_width * 9 / 16)  # Proporcja 16:9
+
+        scrollbar_x = SCREEN_WIDTH - scrollbar_width - 10
+        scrollbar_area_height = SCREEN_HEIGHT - header_height - 100
+
+        # Oblicz ile wierszy potrzeba
+        total_rows = (len(videos) + cols - 1) // cols
+        items_per_screen = ((SCREEN_HEIGHT - header_height - 100) // (thumb_height + spacing_y))
+
+        # Automatyczne przewijanie gdy selected_index jest poza widocznym obszarem
+        selected_row = selected_index // cols
+        if selected_row < videos_scroll_offset:
+            videos_scroll_offset = selected_row
+        elif selected_row >= videos_scroll_offset + items_per_screen:
+            videos_scroll_offset = selected_row - items_per_screen + 1
+
+        videos_scroll_offset = max(0, min(videos_scroll_offset, max(0, total_rows - items_per_screen)))
+
+        # Rysuj miniaturki w siatce
+        for i in range(len(videos)):
+            row = i // cols
+            col = i % cols
+
+            # Pomiń elementy poza widocznym obszarem
+            if row < videos_scroll_offset or row >= videos_scroll_offset + items_per_screen + 1:
+                continue
+
             video = videos[i]
-            
-            if i == selected_index:
-                pygame.draw.rect(screen, BLUE, (30, y_offset - 10, SCREEN_WIDTH - 60, row_height - 20), border_radius=15)
-                prefix = "👉 "
-                name_color = YELLOW
-                info_color = WHITE
-            else:
-                pygame.draw.rect(screen, DARK_GRAY, (30, y_offset - 10, SCREEN_WIDTH - 60, row_height - 20), border_radius=15)
-                prefix = "   "
-                name_color = WHITE
-                info_color = GRAY
-            
-            thumb_x, thumb_y = 50, y_offset + 10
-            
+
+            x = start_x + col * (thumb_width + spacing_x)
+            y = start_y + (row - videos_scroll_offset) * (thumb_height + spacing_y)
+
+            # Sprawdź czy element jest widoczny na ekranie
+            if y + thumb_height > SCREEN_HEIGHT - 100:
+                continue
+
+            # Tło miniaturki
+            bg_color = BLUE if i == selected_index else DARK_GRAY
+            pygame.draw.rect(screen, bg_color, (x - 5, y - 5, thumb_width + 10, thumb_height + 10), border_radius=10)
+
+            # Miniaturka
             if video.stem in thumbnails:
                 try:
-                    screen.blit(thumbnails[video.stem], (thumb_x, thumb_y))
+                    # Skaluj miniaturkę do aktualnego rozmiaru ramki
+                    thumb_surface = thumbnails[video.stem]
+                    scaled_thumb = pygame.transform.scale(thumb_surface, (thumb_width, thumb_height))
+                    screen.blit(scaled_thumb, (x, y))
                 except:
-                    pygame.draw.rect(screen, GRAY, (thumb_x, thumb_y, 320, 180), border_radius=5)
-                    draw_text("📹", font_large, WHITE, thumb_x + 160, thumb_y + 90, center=True)
+                    pygame.draw.rect(screen, GRAY, (x, y, thumb_width, thumb_height), border_radius=5)
+                    draw_text("[VIDEO]", font_large, WHITE, x + thumb_width // 2, y + thumb_height // 2, center=True)
             else:
-                pygame.draw.rect(screen, GRAY, (thumb_x, thumb_y, 320, 180), border_radius=5)
-                draw_text("📹", font_large, WHITE, thumb_x + 160, thumb_y + 90, center=True)
-            
-            pygame.draw.rect(screen, WHITE if i == selected_index else DARK_GRAY, 
-                           (thumb_x, thumb_y, 320, 180), 3, border_radius=5)
-            
-            info_x = thumb_x + 340
-            
-            draw_text(f"#{i + 1}", font_small, info_color, info_x, y_offset + 10)
-            
-            display_name = video.name
-            if len(display_name) > 35:
-                display_name = display_name[:32] + "..."
-            draw_text(f"{prefix}{display_name}", font_medium, name_color, info_x, y_offset + 45)
-            
-            size = video.stat().st_size / (1024*1024)
-            date_str = datetime.fromtimestamp(video.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            
-            draw_text(f"📊 {size:.1f} MB", font_tiny, info_color, info_x, y_offset + 90)
-            draw_text(f"📅 {date_str}", font_tiny, info_color, info_x, y_offset + 120)
-            
-            fps_from_name = extract_fps_from_filename(video.name)
-            if fps_from_name:
-                draw_text(f"🎬 {fps_from_name} FPS", font_tiny, GREEN if i == selected_index else GRAY, 
-                         info_x, y_offset + 150)
-            
-            y_offset += row_height
-        
-        if len(videos) > visible_count:
-            pos_text = f"{selected_index + 1}/{len(videos)}"
-            draw_text(pos_text, font_small, WHITE, SCREEN_WIDTH - 150, header_height + 30, center=True, bg_color=BLUE, padding=10)
-    
+                pygame.draw.rect(screen, GRAY, (x, y, thumb_width, thumb_height), border_radius=5)
+                draw_text("[VIDEO]", font_large, WHITE, x + thumb_width // 2, y + thumb_height // 2, center=True)
+
+            # Ramka
+            border_color = YELLOW if i == selected_index else WHITE
+            border_width = 4 if i == selected_index else 2
+            pygame.draw.rect(screen, border_color, (x, y, thumb_width, thumb_height), border_width, border_radius=5)
+
+            # Checkbox dla zaznaczonych filmów
+            if i in selected_videos:
+                checkbox_size = 40
+                checkbox_x = x + thumb_width - checkbox_size - 10
+                checkbox_y = y + 10
+                pygame.draw.circle(screen, GREEN, (checkbox_x + checkbox_size // 2, checkbox_y + checkbox_size // 2), checkbox_size // 2)
+                draw_text("[YES]", font_medium, WHITE, checkbox_x + checkbox_size // 2, checkbox_y + checkbox_size // 2, center=True)
+
+        # Rysuj scrollbar
+        if total_rows > items_per_screen:
+            # Tło scrollbara
+            pygame.draw.rect(screen, DARK_GRAY, (scrollbar_x, start_y, scrollbar_width, scrollbar_area_height), border_radius=5)
+
+            # Suwak scrollbara
+            scrollbar_handle_height = max(30, int(scrollbar_area_height * items_per_screen / total_rows))
+            scrollbar_handle_y = start_y + int((scrollbar_area_height - scrollbar_handle_height) * videos_scroll_offset / max(1, total_rows - items_per_screen))
+            pygame.draw.rect(screen, WHITE, (scrollbar_x, scrollbar_handle_y, scrollbar_width, scrollbar_handle_height), border_radius=5)
+
+        # Licznik filmów
+        if selected_videos:
+            counter_text = f"{selected_index + 1}/{len(videos)} | Zaznaczono: {len(selected_videos)}"
+        else:
+            counter_text = f"{selected_index + 1}/{len(videos)}"
+        draw_text(counter_text, font_small, WHITE, SCREEN_WIDTH // 2, header_height + 10, center=True, bg_color=BLUE, padding=10)
+
+    # Panel dolny
     panel_height = 80
     panel_y = SCREEN_HEIGHT - panel_height
     pygame.draw.rect(screen, DARK_GRAY, (0, panel_y, SCREEN_WIDTH, panel_height))
-    
-    draw_text("⬆️⬇️ Nawigacja | OK: Odtwórz | Delete: Usuń | Videos: Wróć", 
-             font_small, WHITE, SCREEN_WIDTH // 2, panel_y + 40, center=True)
+
+    # Instrukcje zależne od trybu
+    if multi_select_mode:
+        if selected_videos:
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Delete: Usuń zaznaczone | Videos: Wróć",
+                     font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 40, center=True)
+        else:
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Videos: Wróć",
+                     font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 40, center=True)
+    else:
+        if selected_videos:
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtwórz | Menu: Opcje | Delete: Usuń zaznaczone | Videos: Wróć",
+                     font_small, WHITE, SCREEN_WIDTH // 2, panel_y + 40, center=True)
+        else:
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtwórz | Menu: Opcje | Delete: Usuń | Videos: Wróć",
+                     font_small, WHITE, SCREEN_WIDTH // 2, panel_y + 40, center=True)
+
+
+def draw_video_context_menu():
+    """Menu kontekstowe dla filmów"""
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    overlay.set_alpha(200)
+    overlay.fill(BLACK)
+    screen.blit(overlay, (0, 0))
+
+    menu_width = 700
+    menu_height = 400
+    menu_x = (SCREEN_WIDTH - menu_width) // 2
+    menu_y = (SCREEN_HEIGHT - menu_height) // 2
+
+    pygame.draw.rect(screen, DARK_GRAY, (menu_x, menu_y, menu_width, menu_height), border_radius=20)
+    pygame.draw.rect(screen, BLUE, (menu_x, menu_y, menu_width, menu_height), 5, border_radius=20)
+
+    draw_text("[MENU] OPCJE", font_large, WHITE, SCREEN_WIDTH // 2, menu_y + 60, center=True)
+
+    # Opcje menu
+    menu_options = [
+        {"label": "Zaznacz wiele filmów", "icon": "[SELECT]"},
+        {"label": "Pokaż informacje", "icon": "[INFO]"},
+    ]
+
+    option_height = 80
+    start_y = menu_y + 140
+
+    for i, option in enumerate(menu_options):
+        option_y = start_y + i * (option_height + 20)
+
+        if i == video_context_menu_selection:
+            pygame.draw.rect(screen, BLUE, (menu_x + 40, option_y, menu_width - 80, option_height), border_radius=15)
+            pygame.draw.rect(screen, YELLOW, (menu_x + 40, option_y, menu_width - 80, option_height), 6, border_radius=15)
+            text_color = YELLOW
+        else:
+            pygame.draw.rect(screen, GRAY, (menu_x + 40, option_y, menu_width - 80, option_height), border_radius=15)
+            text_color = WHITE
+
+        draw_text(f"{option['icon']} {option['label']}", font_medium, text_color,
+                 SCREEN_WIDTH // 2, option_y + option_height // 2, center=True)
+
+    draw_text("Up/Down: Wybierz | OK: Zatwierdź | Menu: Wróć", font_small, GRAY,
+             SCREEN_WIDTH // 2, menu_y + menu_height - 40, center=True)
+
+
+def draw_video_info_dialog():
+    """Dialog z informacjami o filmie"""
+    if not videos or video_info_index < 0 or video_info_index >= len(videos):
+        return
+
+    video = videos[video_info_index]
+
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    overlay.set_alpha(200)
+    overlay.fill(BLACK)
+    screen.blit(overlay, (0, 0))
+
+    dialog_width = 900
+    dialog_height = 700
+    dialog_x = (SCREEN_WIDTH - dialog_width) // 2
+    dialog_y = (SCREEN_HEIGHT - dialog_height) // 2
+
+    pygame.draw.rect(screen, DARK_GRAY, (dialog_x, dialog_y, dialog_width, dialog_height), border_radius=20)
+    pygame.draw.rect(screen, BLUE, (dialog_x, dialog_y, dialog_width, dialog_height), 5, border_radius=20)
+
+    draw_text("[INFO] INFORMACJE O FILMIE", font_large, WHITE, SCREEN_WIDTH // 2, dialog_y + 60, center=True)
+
+    # Miniaturka
+    thumb_y = dialog_y + 120
+    if video.stem in thumbnails:
+        try:
+            thumb_x = (SCREEN_WIDTH - 320) // 2
+            screen.blit(thumbnails[video.stem], (thumb_x, thumb_y))
+            pygame.draw.rect(screen, WHITE, (thumb_x, thumb_y, 320, 180), 3, border_radius=5)
+        except:
+            pass
+
+    # Informacje
+    info_y = thumb_y + 200
+    info_spacing = 50
+
+    # Nazwa pliku
+    display_name = video.name
+    if len(display_name) > 50:
+        display_name = display_name[:47] + "..."
+    draw_text(f"[FILE] Nazwa: {display_name}", font_small, WHITE, SCREEN_WIDTH // 2, info_y, center=True)
+
+    # Rozmiar pliku
+    size_mb = video.stat().st_size / (1024 * 1024)
+    draw_text(f"[SIZE] Rozmiar: {size_mb:.2f} MB", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing, center=True)
+
+    # Data i godzina nagrania
+    date_str = datetime.fromtimestamp(video.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    draw_text(f"[DATE] Data nagrania: {date_str}", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 2, center=True)
+
+    # Długość filmu (jeśli możliwe)
+    try:
+        cap = cv2.VideoCapture(str(video))
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps if fps > 0 else 0
+            minutes = int(duration // 60)
+            seconds = int(duration % 60)
+            draw_text(f"[TIME] Długość: {minutes}:{seconds:02d}", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+
+            # Format i FPS
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            draw_text(f"[VIDEO] Format: {width}x{height} @ {int(fps)} FPS", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 4, center=True)
+            cap.release()
+        else:
+            draw_text("[WARN] Nie można odczytać długości", font_small, GRAY, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+    except Exception as e:
+        draw_text(f"[ERROR] Błąd: {str(e)}", font_small, RED, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+
+    draw_text("OK lub Menu: Zamknij", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
 
 
 def draw_playing_screen():
@@ -2014,7 +2220,7 @@ def draw_playing_screen():
     
     if not video_capture:
         screen.fill(BLACK)
-        draw_text("❌ Błąd odtwarzania", font_large, RED, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
+        draw_text("[ERROR] Błąd odtwarzania", font_large, RED, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
         return
     
     if not video_paused:
@@ -2045,7 +2251,7 @@ def draw_playing_screen():
                     video_last_surface = (frame_surface, new_w, new_h)
                     
                 except Exception as e:
-                    print(f"⚠️  Błąd klatki: {e}")
+                    print(f"[WARN] Błąd klatki: {e}")
                 
                 video_current_frame += 1
                 video_last_frame_time = current_time
@@ -2098,14 +2304,14 @@ def draw_playing_screen():
     time_text = f"{format_time(current_time_sec)} / {format_time(total_time_sec)}"
     draw_text(time_text, font_small, WHITE, SCREEN_WIDTH // 2, progress_y + 35, center=True)
     
-    fps_text = f"🎬 {video_fps} FPS"
+    fps_text = f"[VIDEO] {video_fps} FPS"
     draw_text(fps_text, font_tiny, GREEN, SCREEN_WIDTH - 150, panel_y + 20)
     
-    status_text = "⏸️  PAUZA" if video_paused else "▶️  ODTWARZANIE"
+    status_text = "[PAUSE] PAUZA" if video_paused else "[PLAY] ODTWARZANIE"
     status_color = ORANGE if video_paused else GREEN
     draw_text(status_text, font_medium, status_color, SCREEN_WIDTH // 2, panel_y + 105, center=True)
     
-    instructions = "OK: Pauza | ⬅️ ➡️ : Przewiń | Videos: Wyjdź"
+    instructions = "OK: Pauza | Left/Right: Przewiń | Videos: Wyjdź"
     draw_text(instructions, font_tiny, GRAY, SCREEN_WIDTH // 2, 30, center=True, bg_color=BLACK, padding=8)
 
 
@@ -2115,21 +2321,26 @@ def draw_confirm_dialog():
     overlay.set_alpha(220)
     overlay.fill(BLACK)
     screen.blit(overlay, (0, 0))
-    
+
     dialog_width = 900
     dialog_height = 400
     dialog_x = (SCREEN_WIDTH - dialog_width) // 2
     dialog_y = (SCREEN_HEIGHT - dialog_height) // 2
-    
+
     pygame.draw.rect(screen, DARK_GRAY, (dialog_x, dialog_y, dialog_width, dialog_height), border_radius=20)
     pygame.draw.rect(screen, RED, (dialog_x, dialog_y, dialog_width, dialog_height), 5, border_radius=20)
-    
-    draw_text("⚠️  POTWIERDZENIE", font_large, RED, SCREEN_WIDTH // 2, dialog_y + 60, center=True)
-    
-    if videos and 0 <= selected_index < len(videos):
+
+    draw_text("[WARN] POTWIERDZENIE", font_large, RED, SCREEN_WIDTH // 2, dialog_y + 60, center=True)
+
+    if selected_videos:
+        # Multi-delete
+        draw_text(f"Usunąć {len(selected_videos)} zaznaczonych filmów?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
+        draw_text("Ta operacja jest nieodwracalna!", font_small, YELLOW, SCREEN_WIDTH // 2, dialog_y + 180, center=True)
+    elif videos and 0 <= selected_index < len(videos):
+        # Single delete
         video = videos[selected_index]
         draw_text("Usunąć ten film?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
-        
+
         name = video.name
         if len(name) > 40:
             name = name[:37] + "..."
@@ -2148,7 +2359,7 @@ def draw_confirm_dialog():
         pygame.draw.rect(screen, GREEN, (yes_x, button_y, button_w, button_h), border_radius=15)
         pygame.draw.rect(screen, WHITE, (yes_x, button_y, button_w, button_h), 2, border_radius=15)
     
-    draw_text("✓ TAK", font_large, WHITE, yes_x + button_w // 2, button_y + button_h // 2, center=True)
+    draw_text("[YES] TAK", font_large, WHITE, yes_x + button_w // 2, button_y + button_h // 2, center=True)
     
     no_x = SCREEN_WIDTH // 2 - button_w - spacing // 2
     if confirm_selection == 0:
@@ -2158,8 +2369,8 @@ def draw_confirm_dialog():
         pygame.draw.rect(screen, RED, (no_x, button_y, button_w, button_h), border_radius=15)
         pygame.draw.rect(screen, WHITE, (no_x, button_y, button_w, button_h), 2, border_radius=15)
     
-    draw_text("✗ NIE", font_large, WHITE, no_x + button_w // 2, button_y + button_h // 2, center=True)
-    draw_text("⬅️ ➡️  Wybierz | OK: Zatwierdź", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
+    draw_text("[NO] NIE", font_large, WHITE, no_x + button_w // 2, button_y + button_h // 2, center=True)
+    draw_text("Left/Right: Wybierz | OK: Zatwierdź", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
 
 
 # ============================================================================
@@ -2176,14 +2387,16 @@ def handle_record():
 
 
 def handle_videos():
-    global current_state
+    global current_state, selected_videos, multi_select_mode
     if current_state == STATE_MAIN and not recording:
         refresh_videos()
         current_state = STATE_VIDEOS
-        print("\n📹 Menu Videos")
+        print("\n[VIDEOS] Menu Videos")
     elif current_state == STATE_VIDEOS:
         current_state = STATE_MAIN
-        print("\n📺 Ekran główny")
+        selected_videos.clear()  # Wyczyść zaznaczenia przy wyjściu
+        multi_select_mode = False  # Wyłącz tryb multi-select
+        print("\n[MAIN] Ekran główny")
     elif current_state == STATE_PLAYING:
         stop_video_playback()
     elif current_state == STATE_CONFIRM:
@@ -2191,44 +2404,100 @@ def handle_videos():
 
 
 def handle_menu():
-    global current_state
+    global current_state, video_context_menu_selection, multi_select_mode, selected_videos
     if current_state == STATE_MAIN and not recording:
         open_menu()
     elif current_state == STATE_MENU:
         close_menu()
     elif current_state == STATE_SUBMENU:
         close_submenu()
+    elif current_state == STATE_VIDEOS:
+        if multi_select_mode:
+            # Anuluj tryb multi-select i wyczyść zaznaczenia
+            multi_select_mode = False
+            selected_videos.clear()
+            print("[CANCEL] Tryb zaznaczania wielu filmów WYŁĄCZONY - zaznaczenia wyczyszczone")
+        else:
+            # Otwórz menu kontekstowe
+            current_state = STATE_VIDEO_CONTEXT_MENU
+            video_context_menu_selection = 0
+    elif current_state == STATE_VIDEO_CONTEXT_MENU:
+        # Zamknij menu kontekstowe
+        current_state = STATE_VIDEOS
+    elif current_state == STATE_VIDEO_INFO:
+        # Zamknij dialog informacji
+        current_state = STATE_VIDEOS
 
 
 def handle_ok():
-    global current_state, confirm_selection, selected_index, selected_tile
-    
+    global current_state, confirm_selection, selected_index, selected_tile, selected_videos, video_info_index, multi_select_mode
+
     if current_state == STATE_VIDEOS:
         if videos and 0 <= selected_index < len(videos):
-            start_video_playback(videos[selected_index])
-    
+            if multi_select_mode:
+                # W trybie multi-select: toggle zaznaczenia
+                if selected_index in selected_videos:
+                    selected_videos.remove(selected_index)
+                    print(f"[UNCHECK] Odznaczono film #{selected_index + 1}")
+                else:
+                    selected_videos.add(selected_index)
+                    print(f"[CHECK] Zaznaczono film #{selected_index + 1}")
+            else:
+                # Normalnie: odtwórz film
+                start_video_playback(videos[selected_index])
+
     elif current_state == STATE_PLAYING:
         toggle_pause()
-    
+
     elif current_state == STATE_CONFIRM:
         if confirm_selection == 1:
-            if videos and 0 <= selected_index < len(videos):
-                video = videos[selected_index]
-                video.unlink()
-                thumb = THUMBNAIL_DIR / f"{video.stem}.jpg"
-                if thumb.exists():
-                    thumb.unlink()
-                print(f"🗑 Usunięto: {video.name}")
-                refresh_videos()
+            # Usuń wszystkie zaznaczone filmy lub pojedynczy
+            if selected_videos:
+                # Usuń wszystkie zaznaczone
+                for idx in sorted(selected_videos, reverse=True):
+                    if 0 <= idx < len(videos):
+                        video = videos[idx]
+                        video.unlink()
+                        thumb = THUMBNAIL_DIR / f"{video.stem}.jpg"
+                        if thumb.exists():
+                            thumb.unlink()
+                        print(f"[DELETE] Usunięto: {video.name}")
+                selected_videos.clear()
+            else:
+                # Usuń pojedynczy film
+                if videos and 0 <= selected_index < len(videos):
+                    video = videos[selected_index]
+                    video.unlink()
+                    thumb = THUMBNAIL_DIR / f"{video.stem}.jpg"
+                    if thumb.exists():
+                        thumb.unlink()
+                    print(f"[DELETE] Usunięto: {video.name}")
+            refresh_videos()
         current_state = STATE_VIDEOS
         confirm_selection = 0
-    
+
+    elif current_state == STATE_VIDEO_CONTEXT_MENU:
+        # Obsługa wyboru w menu kontekstowym
+        if video_context_menu_selection == 0:
+            # Włącz tryb zaznaczania wielu filmów
+            multi_select_mode = True
+            current_state = STATE_VIDEOS
+            print("[OK] Tryb zaznaczania wielu filmów WŁĄCZONY")
+        elif video_context_menu_selection == 1:
+            # Pokaż informacje
+            video_info_index = selected_index
+            current_state = STATE_VIDEO_INFO
+
+    elif current_state == STATE_VIDEO_INFO:
+        # Zamknij dialog informacji
+        current_state = STATE_VIDEOS
+
     elif current_state == STATE_MENU:
         if selected_tile == -1:
             reset_to_factory()
         elif 0 <= selected_tile < len(menu_tiles):
             open_submenu(menu_tiles[selected_tile]["id"])
-    
+
     elif current_state == STATE_SUBMENU:
         submenu_ok()
 
@@ -2241,25 +2510,31 @@ def handle_delete():
 
 
 def handle_up():
+    global video_context_menu_selection
     if current_state == STATE_VIDEOS:
         videos_navigate_up()
     elif current_state == STATE_PLAYING:
-        print("🔊 Głośność UP (TBD)")
+        print("[VOL] Głośność UP (TBD)")
     elif current_state == STATE_MENU:
         menu_navigate_up()
     elif current_state == STATE_SUBMENU:
         submenu_navigate_up()
+    elif current_state == STATE_VIDEO_CONTEXT_MENU:
+        video_context_menu_selection = max(0, video_context_menu_selection - 1)
 
 
 def handle_down():
+    global video_context_menu_selection
     if current_state == STATE_VIDEOS:
         videos_navigate_down()
     elif current_state == STATE_PLAYING:
-        print("🔉 Głośność DOWN (TBD)")
+        print("[VOL] Głośność DOWN (TBD)")
     elif current_state == STATE_MENU:
         menu_navigate_down()
     elif current_state == STATE_SUBMENU:
         submenu_navigate_down()
+    elif current_state == STATE_VIDEO_CONTEXT_MENU:
+        video_context_menu_selection = min(1, video_context_menu_selection + 1)
 
 
 def handle_left():
@@ -2268,6 +2543,8 @@ def handle_left():
         confirm_selection = 0
     elif current_state == STATE_MENU:
         menu_navigate_left()
+    elif current_state == STATE_VIDEOS:
+        videos_navigate_left()
 
 
 def handle_right():
@@ -2276,6 +2553,8 @@ def handle_right():
         confirm_selection = 1
     elif current_state == STATE_MENU:
         menu_navigate_right()
+    elif current_state == STATE_VIDEOS:
+        videos_navigate_right()
 
 
 def handle_zoom_in():
@@ -2291,7 +2570,7 @@ def handle_zoom_out():
 def cleanup(signum=None, frame=None):
     """Zamknięcie"""
     global camera, recording, running, video_capture
-    print("\nZamykanie...")
+    print("\n[CLEANUP] Zamykanie...")
     running = False
     
     if video_capture:
@@ -2325,7 +2604,7 @@ if __name__ == '__main__':
     init_pygame()
     init_camera()
     
-    print("\nGPIO init...")
+    print("\n[GPIO] GPIO init...")
     btn_record = Button(PIN_RECORD, pull_up=True, bounce_time=0.3)
     btn_ok = Button(PIN_OK, pull_up=True, bounce_time=0.3)
     btn_videos = Button(PIN_VIDEOS, pull_up=True, bounce_time=0.3)
@@ -2350,12 +2629,12 @@ if __name__ == '__main__':
     btn_plus.when_pressed = handle_zoom_in
     btn_minus.when_pressed = handle_zoom_out
     
-    print("✅ GPIO OK")
+    print("[OK] GPIO OK")
     
     print("\n" + "="*70)
-    print("🎬 SYSTEM KAMERA - RASPBERRY PI 5")
+    print("[SYSTEM] SYSTEM KAMERA - RASPBERRY PI 5")
     print("="*70)
-    print("📺 Kamera | 🔴 Record | 📹 Videos | ⚙️  Menu | 🔍 +/- Zoom")
+    print("[MAIN] Kamera | [REC] Record | [VIDEOS] Videos | [CONFIG] Menu | [ZOOM] +/- Zoom")
     print("="*70 + "\n")
     
     clock = pygame.time.Clock()
@@ -2453,6 +2732,12 @@ if __name__ == '__main__':
                 draw_menu_tiles(frame)
             elif current_state == STATE_SUBMENU:
                 draw_submenu_screen(frame)
+            elif current_state == STATE_VIDEO_CONTEXT_MENU:
+                draw_videos_screen()
+                draw_video_context_menu()
+            elif current_state == STATE_VIDEO_INFO:
+                draw_videos_screen()
+                draw_video_info_dialog()
             
             pygame.display.flip()
             clock.tick(30)
@@ -2460,7 +2745,7 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         cleanup()
     except Exception as e:
-        print(f"\n❌ Błąd: {e}")
+        print(f"\n[ERROR] Błąd: {e}")
         import traceback
         traceback.print_exc()
         cleanup()
