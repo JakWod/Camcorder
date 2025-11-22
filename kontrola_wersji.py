@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 import threading
 import math
 import re
+from collections import deque
 
 # ============================================================================
 # KONFIGURACJA
@@ -140,6 +141,8 @@ camera_settings = {
     "manual_date": None,
     "zoom": 0.0,
     "show_grid": True,
+    "stabilization_enabled": False,
+    "stabilization_strength": 0.5,
 }
 
 # Opcje
@@ -174,6 +177,229 @@ ZOOM_BAR_TIMEOUT = 1.0
 # Timing
 MENU_SCROLL_DELAY = 0.35
 VIDEOS_SCROLL_DELAY = 0.25
+
+# Stabilization
+stabilizer = None
+
+
+# ============================================================================
+# KLASA STABILIZACJI OBRAZU
+# ============================================================================
+
+class VideoStabilizer:
+    """Programowa stabilizacja obrazu w czasie rzeczywistym"""
+    
+    def __init__(self, smoothing_radius=30, max_corners=200):
+        """
+        Args:
+            smoothing_radius: Promień wygładzania trajektorii (większa wartość = płynniejsza stabilizacja)
+            max_corners: Maksymalna liczba punktów do śledzenia
+        """
+        self.smoothing_radius = smoothing_radius
+        self.max_corners = max_corners
+        
+        # Przechowywanie poprzedniej klatki i punktów
+        self.prev_gray = None
+        self.prev_points = None
+        
+        # Historia transformacji
+        self.transforms = deque(maxlen=smoothing_radius * 2)
+        
+        # Skumulowana transformacja
+        self.trajectory = np.zeros((3,), dtype=np.float32)  # [dx, dy, da]
+        self.smoothed_trajectory = np.zeros((3,), dtype=np.float32)
+        
+        # Parametry wykrywania punktów
+        self.feature_params = dict(
+            maxCorners=max_corners,
+            qualityLevel=0.01,
+            minDistance=30,
+            blockSize=3
+        )
+        
+        # Parametry optical flow
+        self.lk_params = dict(
+            winSize=(15, 15),
+            maxLevel=2,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
+        )
+        
+        # Crop border (margines obcięcia dla kompensacji ruchu)
+        self.crop_ratio = 0.04  # 4% obcięcia z każdej strony
+        
+        print("[STAB] Inicjalizacja stabilizatora")
+    
+    def reset(self):
+        """Reset stabilizatora"""
+        self.prev_gray = None
+        self.prev_points = None
+        self.transforms.clear()
+        self.trajectory = np.zeros((3,), dtype=np.float32)
+        self.smoothed_trajectory = np.zeros((3,), dtype=np.float32)
+        print("[STAB] Reset stabilizatora")
+    
+    def stabilize_frame(self, frame, strength=0.5):
+        """
+        Stabilizuj pojedynczą klatkę
+        
+        Args:
+            frame: Klatka wejściowa (BGR)
+            strength: Siła stabilizacji (0.0-1.0)
+        
+        Returns:
+            Stabilizowana klatka lub oryginał jeśli stabilizacja nie jest możliwa
+        """
+        if frame is None:
+            return None
+        
+        # Konwersja do skali szarości
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+        
+        # Pierwsza klatka - inicjalizacja
+        if self.prev_gray is None:
+            self.prev_gray = gray
+            self.prev_points = cv2.goodFeaturesToTrack(
+                gray, 
+                mask=None, 
+                **self.feature_params
+            )
+            return frame
+        
+        # Wykryj punkty charakterystyczne jeśli nie ma poprzednich
+        if self.prev_points is None or len(self.prev_points) < 10:
+            self.prev_points = cv2.goodFeaturesToTrack(
+                self.prev_gray,
+                mask=None,
+                **self.feature_params
+            )
+            if self.prev_points is None:
+                self.prev_gray = gray
+                return frame
+        
+        # Optical flow - śledź punkty między klatkami
+        try:
+            curr_points, status, err = cv2.calcOpticalFlowPyrLK(
+                self.prev_gray,
+                gray,
+                self.prev_points,
+                None,
+                **self.lk_params
+            )
+        except Exception as e:
+            print(f"[STAB] Błąd optical flow: {e}")
+            self.prev_gray = gray
+            self.prev_points = None
+            return frame
+        
+        # Filtruj dobre punkty
+        if curr_points is None or status is None:
+            self.prev_gray = gray
+            self.prev_points = None
+            return frame
+        
+        idx = np.where(status == 1)[0]
+        if len(idx) < 10:
+            # Za mało dobrych punktów - wykryj nowe
+            self.prev_points = cv2.goodFeaturesToTrack(
+                gray,
+                mask=None,
+                **self.feature_params
+            )
+            self.prev_gray = gray
+            return frame
+        
+        prev_pts = self.prev_points[idx]
+        curr_pts = curr_points[idx]
+        
+        # Oszacuj transformację (translacja + rotacja)
+        try:
+            m, inliers = cv2.estimateAffinePartial2D(prev_pts, curr_pts)
+        except:
+            self.prev_gray = gray
+            self.prev_points = curr_points
+            return frame
+        
+        if m is None:
+            self.prev_gray = gray
+            self.prev_points = curr_pts
+            return frame
+        
+        # Wyciągnij parametry transformacji
+        dx = m[0, 2]
+        dy = m[1, 2]
+        da = np.arctan2(m[1, 0], m[0, 0])
+        
+        # Dodaj do trajektorii
+        self.trajectory += np.array([dx, dy, da])
+        
+        # Przechowuj transformację
+        self.transforms.append(np.array([dx, dy, da]))
+        
+        # Wygładź trajektorię (ruchoma średnia)
+        if len(self.transforms) >= self.smoothing_radius:
+            smooth_array = np.array(list(self.transforms))
+            smoothed = np.mean(smooth_array[-self.smoothing_radius:], axis=0)
+            self.smoothed_trajectory += smoothed
+            
+            # Oblicz różnicę (korekcja)
+            diff = self.smoothed_trajectory - self.trajectory
+            
+            # Zastosuj siłę stabilizacji
+            diff *= strength
+            
+            # Nowa transformacja ze stabilizacją
+            dx_stab = dx + diff[0]
+            dy_stab = dy + diff[1]
+            da_stab = da + diff[2]
+            
+            # Zbuduj macierz transformacji
+            m_stab = np.array([
+                [np.cos(da_stab), -np.sin(da_stab), dx_stab],
+                [np.sin(da_stab), np.cos(da_stab), dy_stab]
+            ], dtype=np.float32)
+            
+            # Zastosuj transformację do klatki
+            frame_stabilized = cv2.warpAffine(
+                frame, 
+                m_stab, 
+                (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT
+            )
+            
+            # Obetnij brzegi (crop)
+            crop_x = int(w * self.crop_ratio)
+            crop_y = int(h * self.crop_ratio)
+            frame_cropped = frame_stabilized[
+                crop_y:h-crop_y,
+                crop_x:w-crop_x
+            ]
+            
+            # Przeskaluj z powrotem do oryginalnego rozmiaru
+            frame_final = cv2.resize(frame_cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+            
+            # Przygotuj do następnej iteracji
+            self.prev_gray = gray
+            self.prev_points = curr_pts
+            
+            return frame_final
+        else:
+            # Za mało danych do wygładzenia
+            self.prev_gray = gray
+            self.prev_points = curr_pts
+            return frame
+    
+    def set_smoothing_radius(self, radius):
+        """Ustaw promień wygładzania"""
+        self.smoothing_radius = max(10, min(100, radius))
+        self.transforms = deque(list(self.transforms), maxlen=self.smoothing_radius * 2)
+        print(f"[STAB] Promień wygładzania: {self.smoothing_radius}")
+    
+    def set_strength(self, strength):
+        """Ustaw siłę stabilizacji (dla kompatybilności)"""
+        # Siła jest przekazywana jako parametr do stabilize_frame
+        pass
 
 
 # ============================================================================
@@ -459,7 +685,7 @@ def save_config():
 
 def reset_to_factory():
     """Reset do ustawień fabrycznych"""
-    global camera_settings
+    global camera_settings, stabilizer
     camera_settings = {
         "video_resolution": "1080p30",
         "white_balance": "auto",
@@ -475,9 +701,13 @@ def reset_to_factory():
         "manual_date": None,
         "zoom": 0.0,
         "show_grid": True,
+        "stabilization_enabled": False,
+        "stabilization_strength": 0.5,
     }
     save_config()
     apply_camera_settings()
+    if stabilizer:
+        stabilizer.reset()
     print("[OK] Reset do ustawień fabrycznych")
 
 
@@ -511,6 +741,17 @@ def reset_date_settings():
     camera_settings["manual_date"] = None
     save_config()
     print("[OK] Reset ustawień daty")
+
+
+def reset_stabilization_settings():
+    """Reset ustawień stabilizacji"""
+    global stabilizer
+    camera_settings["stabilization_enabled"] = False
+    camera_settings["stabilization_strength"] = 0.5
+    save_config()
+    if stabilizer:
+        stabilizer.reset()
+    print("[OK] Reset ustawień stabilizacji")
 
 
 def apply_camera_settings():
@@ -747,6 +988,12 @@ def init_menu_tiles():
             "description": "Parametry kamery"
         },
         {
+            "id": "stabilization",
+            "title": "Stabilizacja",
+            "icon": "[STAB]",
+            "description": "Stabilizacja obrazu"
+        },
+        {
             "id": "date",
             "title": "Znacznik Daty",
             "icon": "[DATE]",
@@ -787,6 +1034,19 @@ def init_submenu(tile_id):
             {"type": "slider", "label": "Saturacja", "key": "saturation", "min": 0.0, "max": 2.0, "step": 0.1},
             {"type": "slider", "label": "Ostrość", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
             {"type": "slider", "label": "Ekspozycja", "key": "exposure_compensation", "min": -2.0, "max": 2.0, "step": 0.2},
+            {"type": "spacer"},
+            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
+        ]
+    
+    elif tile_id == "stabilization":
+        submenu_items = [
+            {"type": "header", "text": "[STAB] STABILIZACJA OBRAZU"},
+            {"type": "spacer"},
+            {"type": "toggle", "label": "Włącz stabilizację", "key": "stabilization_enabled"},
+            {"type": "slider", "label": "Siła stabilizacji", "key": "stabilization_strength", "min": 0.0, "max": 1.0, "step": 0.1},
+            {"type": "spacer"},
+            {"type": "info", "text": "Stabilizacja działa tylko w podglądzie,"},
+            {"type": "info", "text": "nie wpływa na nagrywany plik."},
             {"type": "spacer"},
             {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
         ]
@@ -906,7 +1166,7 @@ def submenu_navigate_up():
             apply_camera_settings()
     else:
         submenu_selected = max(0, submenu_selected - 1)
-        while submenu_selected > 0 and submenu_items[submenu_selected]["type"] in ["spacer", "header"]:
+        while submenu_selected > 0 and submenu_items[submenu_selected]["type"] in ["spacer", "header", "info"]:
             submenu_selected -= 1
 
 
@@ -932,13 +1192,13 @@ def submenu_navigate_down():
             apply_camera_settings()
     else:
         submenu_selected = min(len(submenu_items) - 1, submenu_selected + 1)
-        while submenu_selected < len(submenu_items) - 1 and submenu_items[submenu_selected]["type"] in ["spacer", "header"]:
+        while submenu_selected < len(submenu_items) - 1 and submenu_items[submenu_selected]["type"] in ["spacer", "header", "info"]:
             submenu_selected += 1
 
 
 def submenu_ok():
     """Akcja OK w submenu"""
-    global submenu_editing, submenu_edit_value
+    global submenu_editing, submenu_edit_value, stabilizer
     
     item = submenu_items[submenu_selected]
     
@@ -950,6 +1210,8 @@ def submenu_ok():
                 reset_manual_settings()
             elif current_submenu == "date":
                 reset_date_settings()
+            elif current_submenu == "stabilization":
+                reset_stabilization_settings()
         elif item["action"] == "reset_battery":
             global fake_battery_level
             fake_battery_level = None
@@ -958,6 +1220,14 @@ def submenu_ok():
         key = item["key"]
         camera_settings[key] = not camera_settings[key]
         save_config()
+        
+        # Reset stabilizatora gdy zmienia się ustawienie
+        if key == "stabilization_enabled" and stabilizer:
+            if camera_settings[key]:
+                print("[STAB] Stabilizacja WŁĄCZONA")
+            else:
+                print("[STAB] Stabilizacja WYŁĄCZONA")
+                stabilizer.reset()
 
     elif item["type"] in ["slider", "select", "battery_slider"]:
         submenu_editing = not submenu_editing
@@ -995,26 +1265,36 @@ def draw_menu_tiles(frame):
     
     draw_text("[CONFIG] USTAWIENIA", font_large, YELLOW, SCREEN_WIDTH // 2, 60, center=True)
     
+    # Dwie rzędy kafelków
+    tiles_per_row = 3
     tile_width = 350
     tile_height = 250
-    spacing = 40
-    start_x = (SCREEN_WIDTH - (tile_width * 3 + spacing * 2)) // 2
-    tile_y = 180
+    spacing_x = 40
+    spacing_y = 40
+    
+    # Oblicz pozycję startową dla wycentrowania
+    total_width = tiles_per_row * tile_width + (tiles_per_row - 1) * spacing_x
+    start_x = (SCREEN_WIDTH - total_width) // 2
+    start_y = 180
     
     for i, tile in enumerate(menu_tiles):
-        x = start_x + i * (tile_width + spacing)
+        row = i // tiles_per_row
+        col = i % tiles_per_row
+        
+        x = start_x + col * (tile_width + spacing_x)
+        y = start_y + row * (tile_height + spacing_y)
         
         is_selected = (i == selected_tile)
         
         if is_selected:
-            pygame.draw.rect(screen, BLUE, (x, tile_y, tile_width, tile_height), border_radius=20)
-            pygame.draw.rect(screen, YELLOW, (x, tile_y, tile_width, tile_height), 6, border_radius=20)
+            pygame.draw.rect(screen, BLUE, (x, y, tile_width, tile_height), border_radius=20)
+            pygame.draw.rect(screen, YELLOW, (x, y, tile_width, tile_height), 6, border_radius=20)
         else:
-            pygame.draw.rect(screen, DARK_GRAY, (x, tile_y, tile_width, tile_height), border_radius=20)
-            pygame.draw.rect(screen, GRAY, (x, tile_y, tile_width, tile_height), 3, border_radius=20)
+            pygame.draw.rect(screen, DARK_GRAY, (x, y, tile_width, tile_height), border_radius=20)
+            pygame.draw.rect(screen, GRAY, (x, y, tile_width, tile_height), 3, border_radius=20)
         
         icon_size = 100
-        icon_y = tile_y + 40
+        icon_y = y + 40
         draw_text(tile["icon"], font_medium, WHITE, x + tile_width // 2, icon_y, center=True)
         
         title_y = icon_y + 80
@@ -1025,7 +1305,8 @@ def draw_menu_tiles(frame):
         draw_text(tile["description"], font_tiny, GRAY if not is_selected else WHITE, 
                  x + tile_width // 2, desc_y, center=True)
     
-    reset_y = tile_y + tile_height + 60
+    # Przycisk reset na dole
+    reset_y = start_y + 2 * (tile_height + spacing_y) - 40
     reset_width = 600
     reset_height = 80
     reset_x = (SCREEN_WIDTH - reset_width) // 2
@@ -1088,6 +1369,10 @@ def draw_submenu_screen(frame):
         
         elif item["type"] == "spacer":
             y += 20
+        
+        elif item["type"] == "info":
+            draw_text(item["text"], font_tiny, LIGHT_BLUE, menu_x + menu_width // 2, y + 5, center=True)
+            y += 30
         
         elif item["type"] == "slider":
             is_selected = (actual_idx == submenu_selected)
@@ -1359,6 +1644,29 @@ def draw_battery_icon():
     
     # Wyłącz clipping
     screen.set_clip(None)
+
+
+def draw_stabilization_indicator():
+    """Rysuj wskaźnik stabilizacji gdy jest włączona"""
+    if not camera_settings.get("stabilization_enabled", False):
+        return
+    
+    # Pozycja - lewy górny róg, pod przyciskiem MENU
+    indicator_x = 20
+    indicator_y = 85
+    indicator_width = 100
+    indicator_height = 40
+    
+    # Tło
+    bg_surface = pygame.Surface((indicator_width, indicator_height), pygame.SRCALPHA)
+    bg_surface.fill((0, 100, 255, 150))
+    screen.blit(bg_surface, (indicator_x, indicator_y))
+    
+    # Ramka
+    pygame.draw.rect(screen, BLUE, (indicator_x, indicator_y, indicator_width, indicator_height), 3, border_radius=8)
+    
+    # Tekst
+    draw_text_with_outline("STAB", font_small, WHITE, BLACK, indicator_x + indicator_width // 2, indicator_y + indicator_height // 2, center=True)
 
 
 def draw_zoom_bar():
@@ -1719,6 +2027,13 @@ def init_camera():
     print(f"[OK] Kamera OK: {resolution}")
 
 
+def init_stabilizer():
+    """Inicjalizuj stabilizator"""
+    global stabilizer
+    stabilizer = VideoStabilizer(smoothing_radius=30, max_corners=200)
+    print("[OK] Stabilizator zainicjalizowany")
+
+
 # ============================================================================
 # NAGRYWANIE
 # ============================================================================
@@ -1936,11 +2251,17 @@ def draw_main_screen(frame):
     
     if frame is not None:
         try:
+            # Zastosuj stabilizację jeśli włączona
+            if camera_settings.get("stabilization_enabled", False) and stabilizer:
+                strength = camera_settings.get("stabilization_strength", 0.5)
+                frame = stabilizer.stabilize_frame(frame, strength)
+            
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_resized = cv2.resize(frame_rgb, (SCREEN_WIDTH, SCREEN_HEIGHT))
             frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
             screen.blit(frame_surface, (0, 0))
-        except:
+        except Exception as e:
+            print(f"[WARN] Błąd wyświetlania: {e}")
             draw_text("[CAM] Kamera", font_large, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
     
     draw_grid_overlay()
@@ -1954,6 +2275,7 @@ def draw_main_screen(frame):
         draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
                  font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
+    draw_stabilization_indicator()
     draw_zoom_bar()
     draw_recording_indicator()
 
@@ -2603,6 +2925,7 @@ if __name__ == '__main__':
     
     init_pygame()
     init_camera()
+    init_stabilizer()
     
     print("\n[GPIO] GPIO init...")
     btn_record = Button(PIN_RECORD, pull_up=True, bounce_time=0.3)
@@ -2635,6 +2958,7 @@ if __name__ == '__main__':
     print("[SYSTEM] SYSTEM KAMERA - RASPBERRY PI 5")
     print("="*70)
     print("[MAIN] Kamera | [REC] Record | [VIDEOS] Videos | [CONFIG] Menu | [ZOOM] +/- Zoom")
+    print("[STAB] Stabilizacja włączana w menu")
     print("="*70 + "\n")
     
     clock = pygame.time.Clock()
