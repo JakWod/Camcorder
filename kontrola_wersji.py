@@ -1166,24 +1166,29 @@ def draw_menu_tiles(frame):
     pygame.draw.rect(screen, dark_blue_gray, (list_panel_x, list_panel_y, list_panel_width, list_panel_height), border_radius=10)
 
     # Dodaj liniowy gradient - co 15 pikseli jasność +2, grubość linii -1 (start: 10px)
+    # Cykl powtarza się gdy grubość dojdzie do 0
     line_spacing = 15
     brightness_increment = 2
     initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1  # +1 żeby uwzględnić 0
 
     current_y = list_panel_y + line_spacing
     line_index = 0
 
     while current_y < list_panel_y + list_panel_height:
+        # Cykliczny indeks (resetuje się po osiągnięciu cycle_length)
+        cyclic_index = line_index % cycle_length
+
         # Oblicz nową jasność koloru
-        brightness_boost = line_index * brightness_increment
+        brightness_boost = cyclic_index * brightness_increment
         line_color = (
             min(255, dark_blue_gray[0] + brightness_boost),
             min(255, dark_blue_gray[1] + brightness_boost),
             min(255, dark_blue_gray[2] + brightness_boost)
         )
 
-        # Oblicz grubość linii (zmniejsza się o 1 co iterację)
-        line_thickness = max(0, initial_line_thickness - line_index)
+        # Oblicz grubość linii (zmniejsza się o 1 co iterację, potem resetuje)
+        line_thickness = initial_line_thickness - cyclic_index
 
         # Rysuj linię tylko jeśli ma grubość > 0
         if line_thickness > 0:
@@ -2103,7 +2108,10 @@ def init_pygame():
     pygame.display.set_caption("Kamera System")
     pygame.mouse.set_visible(False)
 
-    # Załaduj czcionki
+    # Wczytaj konfigurację PRZED załadowaniem czcionek
+    load_config()
+
+    # Załaduj czcionki (korzysta z camera_settings["font_family"])
     load_fonts()
 
     screen.fill(BLACK)
@@ -2119,10 +2127,10 @@ def init_camera():
     """Inicjalizuj kamerę"""
     global camera
     print("[INIT] Kamera init...")
-    
+
     resolution = camera_settings.get("video_resolution", "1080p30")
     res_config = RESOLUTION_MAP[resolution]
-    
+
     camera = Picamera2()
     config = camera.create_video_configuration(
         main={"size": res_config["size"], "format": "RGB888"},
@@ -2130,10 +2138,10 @@ def init_camera():
     )
     camera.configure(config)
     camera.start()
-    
-    load_config()
+
+    # Konfiguracja została już wczytana w init_pygame()
     apply_camera_settings()
-    
+
     print(f"[OK] Kamera OK: {resolution}")
 
 
