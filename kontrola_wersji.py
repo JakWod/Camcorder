@@ -19,7 +19,6 @@ from PIL import Image, ImageDraw, ImageFont
 import threading
 import math
 import re
-from collections import deque
 
 # ============================================================================
 # KONFIGURACJA
@@ -105,6 +104,7 @@ font_large = None
 font_medium = None
 font_small = None
 font_tiny = None
+menu_font = None
 SCREEN_WIDTH = 0
 SCREEN_HEIGHT = 0
 
@@ -143,14 +143,35 @@ camera_settings = {
     "manual_date": None,
     "zoom": 0.0,
     "show_grid": True,
-    "stabilization_enabled": False,
-    "stabilization_strength": 0.5,
+    "font_family": "HomeVideo",
 }
 
 # Opcje
 WB_MODES = ["auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy"]
 DATE_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"]
 VIDEO_RESOLUTIONS = ["1080p30", "1080p60", "720p30", "720p60", "4K30"]
+
+# Definicje czcionek
+FONT_DEFINITIONS = {
+    "HomeVideo": {
+        "path": "/home/pi/fonts/home_video/HomeVideo-Regular.otf",
+        "scale": 0.769
+    },
+    "Faithful": {
+        "path": "/home/pi/fonts/compliance_sans/Faithful.ttf",
+        "scale": 0.923
+    },
+    "DigitalPixel": {
+        "path": "/home/pi/fonts/digital_pixel_v123/DigitalPixelV123-Regular.otf",
+        "scale": 0.385
+    },
+    "DigitalPixel2": {
+        "path": "/home/pi/fonts/digital_pixel_v124/DigitalPixelV124-Regular.otf",
+        "scale": 0.538
+    }
+}
+
+FONT_NAMES = list(FONT_DEFINITIONS.keys())
 
 # Mapowanie rozdzielczości
 RESOLUTION_MAP = {
@@ -179,229 +200,6 @@ ZOOM_BAR_TIMEOUT = 1.0
 # Timing
 MENU_SCROLL_DELAY = 0.35
 VIDEOS_SCROLL_DELAY = 0.25
-
-# Stabilization
-stabilizer = None
-
-
-# ============================================================================
-# KLASA STABILIZACJI OBRAZU
-# ============================================================================
-
-class VideoStabilizer:
-    """Programowa stabilizacja obrazu w czasie rzeczywistym"""
-    
-    def __init__(self, smoothing_radius=30, max_corners=200):
-        """
-        Args:
-            smoothing_radius: Promień wygładzania trajektorii (większa wartość = płynniejsza stabilizacja)
-            max_corners: Maksymalna liczba punktów do śledzenia
-        """
-        self.smoothing_radius = smoothing_radius
-        self.max_corners = max_corners
-        
-        # Przechowywanie poprzedniej klatki i punktów
-        self.prev_gray = None
-        self.prev_points = None
-        
-        # Historia transformacji
-        self.transforms = deque(maxlen=smoothing_radius * 2)
-        
-        # Skumulowana transformacja
-        self.trajectory = np.zeros((3,), dtype=np.float32)  # [dx, dy, da]
-        self.smoothed_trajectory = np.zeros((3,), dtype=np.float32)
-        
-        # Parametry wykrywania punktów
-        self.feature_params = dict(
-            maxCorners=max_corners,
-            qualityLevel=0.01,
-            minDistance=30,
-            blockSize=3
-        )
-        
-        # Parametry optical flow
-        self.lk_params = dict(
-            winSize=(15, 15),
-            maxLevel=2,
-            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
-        )
-        
-        # Crop border (margines obcięcia dla kompensacji ruchu)
-        self.crop_ratio = 0.04  # 4% obcięcia z każdej strony
-        
-        print("[STAB] Inicjalizacja stabilizatora")
-    
-    def reset(self):
-        """Reset stabilizatora"""
-        self.prev_gray = None
-        self.prev_points = None
-        self.transforms.clear()
-        self.trajectory = np.zeros((3,), dtype=np.float32)
-        self.smoothed_trajectory = np.zeros((3,), dtype=np.float32)
-        print("[STAB] Reset stabilizatora")
-    
-    def stabilize_frame(self, frame, strength=0.5):
-        """
-        Stabilizuj pojedynczą klatkę
-        
-        Args:
-            frame: Klatka wejściowa (BGR)
-            strength: Siła stabilizacji (0.0-1.0)
-        
-        Returns:
-            Stabilizowana klatka lub oryginał jeśli stabilizacja nie jest możliwa
-        """
-        if frame is None:
-            return None
-        
-        # Konwersja do skali szarości
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape
-        
-        # Pierwsza klatka - inicjalizacja
-        if self.prev_gray is None:
-            self.prev_gray = gray
-            self.prev_points = cv2.goodFeaturesToTrack(
-                gray, 
-                mask=None, 
-                **self.feature_params
-            )
-            return frame
-        
-        # Wykryj punkty charakterystyczne jeśli nie ma poprzednich
-        if self.prev_points is None or len(self.prev_points) < 10:
-            self.prev_points = cv2.goodFeaturesToTrack(
-                self.prev_gray,
-                mask=None,
-                **self.feature_params
-            )
-            if self.prev_points is None:
-                self.prev_gray = gray
-                return frame
-        
-        # Optical flow - śledź punkty między klatkami
-        try:
-            curr_points, status, err = cv2.calcOpticalFlowPyrLK(
-                self.prev_gray,
-                gray,
-                self.prev_points,
-                None,
-                **self.lk_params
-            )
-        except Exception as e:
-            print(f"[STAB] Błąd optical flow: {e}")
-            self.prev_gray = gray
-            self.prev_points = None
-            return frame
-        
-        # Filtruj dobre punkty
-        if curr_points is None or status is None:
-            self.prev_gray = gray
-            self.prev_points = None
-            return frame
-        
-        idx = np.where(status == 1)[0]
-        if len(idx) < 10:
-            # Za mało dobrych punktów - wykryj nowe
-            self.prev_points = cv2.goodFeaturesToTrack(
-                gray,
-                mask=None,
-                **self.feature_params
-            )
-            self.prev_gray = gray
-            return frame
-        
-        prev_pts = self.prev_points[idx]
-        curr_pts = curr_points[idx]
-        
-        # Oszacuj transformację (translacja + rotacja)
-        try:
-            m, inliers = cv2.estimateAffinePartial2D(prev_pts, curr_pts)
-        except:
-            self.prev_gray = gray
-            self.prev_points = curr_points
-            return frame
-        
-        if m is None:
-            self.prev_gray = gray
-            self.prev_points = curr_pts
-            return frame
-        
-        # Wyciągnij parametry transformacji
-        dx = m[0, 2]
-        dy = m[1, 2]
-        da = np.arctan2(m[1, 0], m[0, 0])
-        
-        # Dodaj do trajektorii
-        self.trajectory += np.array([dx, dy, da])
-        
-        # Przechowuj transformację
-        self.transforms.append(np.array([dx, dy, da]))
-        
-        # Wygładź trajektorię (ruchoma średnia)
-        if len(self.transforms) >= self.smoothing_radius:
-            smooth_array = np.array(list(self.transforms))
-            smoothed = np.mean(smooth_array[-self.smoothing_radius:], axis=0)
-            self.smoothed_trajectory += smoothed
-            
-            # Oblicz różnicę (korekcja)
-            diff = self.smoothed_trajectory - self.trajectory
-            
-            # Zastosuj siłę stabilizacji
-            diff *= strength
-            
-            # Nowa transformacja ze stabilizacją
-            dx_stab = dx + diff[0]
-            dy_stab = dy + diff[1]
-            da_stab = da + diff[2]
-            
-            # Zbuduj macierz transformacji
-            m_stab = np.array([
-                [np.cos(da_stab), -np.sin(da_stab), dx_stab],
-                [np.sin(da_stab), np.cos(da_stab), dy_stab]
-            ], dtype=np.float32)
-            
-            # Zastosuj transformację do klatki
-            frame_stabilized = cv2.warpAffine(
-                frame, 
-                m_stab, 
-                (w, h),
-                flags=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_REFLECT
-            )
-            
-            # Obetnij brzegi (crop)
-            crop_x = int(w * self.crop_ratio)
-            crop_y = int(h * self.crop_ratio)
-            frame_cropped = frame_stabilized[
-                crop_y:h-crop_y,
-                crop_x:w-crop_x
-            ]
-            
-            # Przeskaluj z powrotem do oryginalnego rozmiaru
-            frame_final = cv2.resize(frame_cropped, (w, h), interpolation=cv2.INTER_LINEAR)
-            
-            # Przygotuj do następnej iteracji
-            self.prev_gray = gray
-            self.prev_points = curr_pts
-            
-            return frame_final
-        else:
-            # Za mało danych do wygładzenia
-            self.prev_gray = gray
-            self.prev_points = curr_pts
-            return frame
-    
-    def set_smoothing_radius(self, radius):
-        """Ustaw promień wygładzania"""
-        self.smoothing_radius = max(10, min(100, radius))
-        self.transforms = deque(list(self.transforms), maxlen=self.smoothing_radius * 2)
-        print(f"[STAB] Promień wygładzania: {self.smoothing_radius}")
-    
-    def set_strength(self, strength):
-        """Ustaw siłę stabilizacji (dla kompatybilności)"""
-        # Siła jest przekazywana jako parametr do stabilize_frame
-        pass
 
 
 # ============================================================================
@@ -687,9 +485,9 @@ def save_config():
 
 def reset_to_factory():
     """Reset do ustawień fabrycznych"""
-    global camera_settings, stabilizer
+    global camera_settings
     camera_settings = {
-        "video_resolution": "1080p30",
+        "video_resolution": "1080p60",
         "white_balance": "auto",
         "brightness": 0.0,
         "contrast": 1.0,
@@ -703,13 +501,9 @@ def reset_to_factory():
         "manual_date": None,
         "zoom": 0.0,
         "show_grid": True,
-        "stabilization_enabled": False,
-        "stabilization_strength": 0.5,
     }
     save_config()
     apply_camera_settings()
-    if stabilizer:
-        stabilizer.reset()
     print("[OK] Reset do ustawień fabrycznych")
 
 
@@ -743,17 +537,6 @@ def reset_date_settings():
     camera_settings["manual_date"] = None
     save_config()
     print("[OK] Reset ustawień daty")
-
-
-def reset_stabilization_settings():
-    """Reset ustawień stabilizacji"""
-    global stabilizer
-    camera_settings["stabilization_enabled"] = False
-    camera_settings["stabilization_strength"] = 0.5
-    save_config()
-    if stabilizer:
-        stabilizer.reset()
-    print("[OK] Reset ustawień stabilizacji")
 
 
 def apply_camera_settings():
@@ -992,6 +775,13 @@ def init_menu_tiles():
             "section": "Image Quality/Size"
         },
         {
+            "id": "font",
+            "label": "Czcionka",
+            "value": lambda: camera_settings.get("font_family", "HomeVideo"),
+            "icon": "[VIDEO]",
+            "section": "Image Quality/Size"
+        },
+        {
             "id": "wb",
             "label": "White Balance",
             "value": lambda: camera_settings.get("awb_mode", "auto"),
@@ -999,7 +789,6 @@ def init_menu_tiles():
             "section": "Manual Settings"
         },
         {
-<<<<<<< HEAD
             "id": "brightness",
             "label": "Jasnosc",
             "value": lambda: f"{camera_settings.get('brightness', 0.0):.1f}",
@@ -1038,16 +827,6 @@ def init_menu_tiles():
             "id": "show_date",
             "label": "Pokaz date",
             "value": lambda: "WL." if camera_settings.get("show_date", False) else "WYL.",
-=======
-            "id": "stabilization",
-            "title": "Stabilizacja",
-            "icon": "[STAB]",
-            "description": "Stabilizacja obrazu"
-        },
-        {
-            "id": "date",
-            "title": "Znacznik Daty",
->>>>>>> 20f45e4f977b82835052411b9db354e7bf1b5fd2
             "icon": "[DATE]",
             "section": "Znacznik Daty"
         },
@@ -1087,8 +866,19 @@ def init_submenu(tile_id):
             {"type": "spacer"},
             {"type": "select", "label": "Rozdzielczosc", "key": "video_resolution", "options": VIDEO_RESOLUTIONS},
             {"type": "toggle", "label": "Siatka pomocnicza", "key": "show_grid"},
+            {"type": "select", "label": "Czcionka", "key": "font_family", "options": FONT_NAMES},
             {"type": "spacer"},
             {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
+        ]
+
+    elif tile_id == "font":
+        submenu_items = [
+            {"type": "header", "text": "[VIDEO] CZCIONKA"},
+            {"type": "spacer"},
+            {"type": "select", "label": "Czcionka", "key": "font_family", "options": FONT_NAMES},
+            {"type": "spacer"},
+            {"type": "info", "text": "Zmiana czcionki wymaga"},
+            {"type": "info", "text": "przeladowania interfejsu"},
         ]
 
     elif tile_id == "manual":
@@ -1104,24 +894,7 @@ def init_submenu(tile_id):
             {"type": "spacer"},
             {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
         ]
-<<<<<<< HEAD
 
-=======
-    
-    elif tile_id == "stabilization":
-        submenu_items = [
-            {"type": "header", "text": "[STAB] STABILIZACJA OBRAZU"},
-            {"type": "spacer"},
-            {"type": "toggle", "label": "Włącz stabilizację", "key": "stabilization_enabled"},
-            {"type": "slider", "label": "Siła stabilizacji", "key": "stabilization_strength", "min": 0.0, "max": 1.0, "step": 0.1},
-            {"type": "spacer"},
-            {"type": "info", "text": "Stabilizacja działa tylko w podglądzie,"},
-            {"type": "info", "text": "nie wpływa na nagrywany plik."},
-            {"type": "spacer"},
-            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
-        ]
-    
->>>>>>> 20f45e4f977b82835052411b9db354e7bf1b5fd2
     elif tile_id == "date":
         submenu_items = [
             {"type": "header", "text": "[DATE] ZNACZNIK DATY"},
@@ -1252,7 +1025,11 @@ def submenu_navigate_up():
             current_idx = options.index(camera_settings[key]) if camera_settings[key] in options else 0
             new_idx = (current_idx + 1) % len(options)
             camera_settings[key] = options[new_idx]
-            apply_camera_settings()
+            if key == "font_family":
+                load_fonts()  # Przeładuj czcionki
+                save_config()
+            else:
+                apply_camera_settings()
     else:
         submenu_selected = max(0, submenu_selected - 1)
         while submenu_selected > 0 and submenu_items[submenu_selected]["type"] in ["spacer", "header", "info"]:
@@ -1278,7 +1055,11 @@ def submenu_navigate_down():
             current_idx = options.index(camera_settings[key]) if camera_settings[key] in options else 0
             new_idx = (current_idx - 1) % len(options)
             camera_settings[key] = options[new_idx]
-            apply_camera_settings()
+            if key == "font_family":
+                load_fonts()  # Przeładuj czcionki
+                save_config()
+            else:
+                apply_camera_settings()
     else:
         submenu_selected = min(len(submenu_items) - 1, submenu_selected + 1)
         while submenu_selected < len(submenu_items) - 1 and submenu_items[submenu_selected]["type"] in ["spacer", "header", "info"]:
@@ -1287,7 +1068,7 @@ def submenu_navigate_down():
 
 def submenu_ok():
     """Akcja OK w submenu"""
-    global submenu_editing, submenu_edit_value, stabilizer
+    global submenu_editing, submenu_edit_value
     
     item = submenu_items[submenu_selected]
     
@@ -1299,8 +1080,6 @@ def submenu_ok():
                 reset_manual_settings()
             elif current_submenu == "date":
                 reset_date_settings()
-            elif current_submenu == "stabilization":
-                reset_stabilization_settings()
         elif item["action"] == "reset_battery":
             global fake_battery_level
             fake_battery_level = None
@@ -1309,14 +1088,6 @@ def submenu_ok():
         key = item["key"]
         camera_settings[key] = not camera_settings[key]
         save_config()
-        
-        # Reset stabilizatora gdy zmienia się ustawienie
-        if key == "stabilization_enabled" and stabilizer:
-            if camera_settings[key]:
-                print("[STAB] Stabilizacja WŁĄCZONA")
-            else:
-                print("[STAB] Stabilizacja WYŁĄCZONA")
-                stabilizer.reset()
 
     elif item["type"] in ["slider", "select", "battery_slider"]:
         submenu_editing = not submenu_editing
@@ -1352,6 +1123,23 @@ def draw_menu_tiles(frame):
     overlay.fill(BLACK)
     screen.blit(overlay, (0, 0))
 
+    
+    blue_gray_top = (70, 90, 110)  # Niebiesko-szary kolor
+
+    gradient_height = SCREEN_HEIGHT
+    start_color = BLACK
+    end_color = blue_gray_top
+
+    for y in range(gradient_height):
+        ratio = y / gradient_height
+        r = int(start_color[0] * (1 - ratio) + end_color[0] * ratio)
+        g = int(start_color[1] * (1 - ratio) + end_color[1] * ratio) 
+        b = int(start_color[2] * (1 - ratio) + end_color[2] * ratio)
+        color = (r, g, b)
+        pygame.draw.line(screen, color, (0, y), (SCREEN_WIDTH, y))
+
+    
+
     # Wymiary paneli
     # Panel z sekcjami
     section_icon_size = 75
@@ -1365,8 +1153,40 @@ def draw_menu_tiles(frame):
     list_panel_width = SCREEN_WIDTH - list_panel_x - list_panel_margin
     list_panel_height = SCREEN_HEIGHT - list_panel_y - 100 # Odejmujemy więcej, żeby zostawić miejsce na dolną belkę
 
-    # Rysuj ramkę panelu z opcjami (prawy)
-    pygame.draw.rect(screen, DARK_GRAY, (list_panel_x, list_panel_y, list_panel_width, list_panel_height), border_radius=10)
+    # Rysuj ramkę panelu z opcjami (prawy) - ciemniejszy odcień niebiesko-szarego z liniowym gradientem
+    dark_blue_gray = (40, 50, 60)  # Ciemniejszy odcień niebiesko-szarego
+    pygame.draw.rect(screen, dark_blue_gray, (list_panel_x, list_panel_y, list_panel_width, list_panel_height), border_radius=10)
+
+    # Dodaj liniowy gradient - co 15 pikseli jasność +2, grubość linii -1 (start: 10px)
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+
+    current_y = list_panel_y + line_spacing
+    line_index = 0
+
+    while current_y < list_panel_y + list_panel_height:
+        # Oblicz nową jasność koloru
+        brightness_boost = line_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+
+        # Oblicz grubość linii (zmniejsza się o 1 co iterację)
+        line_thickness = max(0, initial_line_thickness - line_index)
+
+        # Rysuj linię tylko jeśli ma grubość > 0
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (list_panel_x + 10, current_y + i),
+                               (list_panel_x + list_panel_width - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
     pygame.draw.rect(screen, LIGHT_BLUE, (list_panel_x, list_panel_y, list_panel_width, list_panel_height), 3, border_radius=10)
 
 
@@ -1381,17 +1201,20 @@ def draw_menu_tiles(frame):
     section_x = list_panel_margin
     section_start_y = list_panel_y
     
-<<<<<<< HEAD
     # Rysowanie sekcji i łączenie z panelem po prawej
     for i, section in enumerate(sections):
         y = section_start_y + i * section_height
         is_selected = (i == selected_section)
 
         # Rysuj tło i ramkę sekcji
-        if is_selected and not menu_editing_mode:
-            # Kolor wybrany
+        if is_selected and menu_editing_mode:
+            # Kolor wybrany w trybie edycji - taki sam jak główny kwadrat
+            bg_color = dark_blue_gray  # (40, 50, 60) - dopasowany do głównego panelu
+            border_color = WHITE
+        elif is_selected and not menu_editing_mode:
+            # Kolor wybrany poza trybem edycji
             bg_color = (60, 60, 60)
-            border_color = YELLOW
+            border_color = WHITE
         else:
             # Kolor niewybrany
             bg_color = (30, 30, 30)
@@ -1399,27 +1222,38 @@ def draw_menu_tiles(frame):
 
         # Rysuj prostokąt
         rect_style = border_radius=10
-        if is_selected and not menu_editing_mode:
-            # Jeśli wybrany i nie edytujemy, prostokąt łączy się z prawej
+        if is_selected and menu_editing_mode:
+            # Jeśli wybrany i edytujemy (przeszliśmy strzałką w prawo), prostokąt łączy się z prawej
             pygame.draw.rect(screen, bg_color, (section_x, y, section_panel_width, section_height), rect_style)
-            
+
             # Rysuj ramkę z pominięciem prawej krawędzi
             pygame.draw.line(screen, border_color, (section_x, y), (section_x + section_panel_width, y), 3) # Góra
             pygame.draw.line(screen, border_color, (section_x, y + section_height), (section_x + section_panel_width, y + section_height), 3) # Dół
             pygame.draw.line(screen, border_color, (section_x, y), (section_x, y + section_height), 3) # Lewa
-            
+
             # Wypełnij szczelinę między sekcją a panelem głównym
             pygame.draw.rect(screen, bg_color, (section_x + section_panel_width - 3, y + 1, list_panel_x - (section_x + section_panel_width) + 6, section_height - 2))
-            
+
         else:
             # Standardowy prostokąt z pełną ramką
             pygame.draw.rect(screen, bg_color, (section_x, y, section_panel_width, section_height), rect_style)
             pygame.draw.rect(screen, border_color, (section_x, y, section_panel_width, section_height), 3, rect_style)
 
 
-        # Ikona
-        icon_color = YELLOW if is_selected else WHITE
-        draw_text(section["icon"], font_large, icon_color, 
+        # Ikona - kolor zależy od stanu
+        if is_selected and menu_editing_mode:
+            # Jeśli wybrany i w trybie edycji (opcje po prawej zaznaczone) - biały
+            icon_color = WHITE
+        elif is_selected and not menu_editing_mode:
+            # Jeśli wybrany ale nie w trybie edycji (aktualna zakładka, ikony z lewej zaznaczone) - żółty
+            icon_color = YELLOW
+        elif not menu_editing_mode:
+            # Gdy zaznaczone są ikony z lewej (nawigacja po sekcjach), wszystkie nieaktywne ikony białe
+            icon_color = WHITE
+        else:
+            # W trybie edycji opcji, nieaktywne ikony szare
+            icon_color = GRAY
+        draw_text(section["icon"], font_large, icon_color,
                   section_x + section_panel_width // 2, y + section_height // 2, center=True)
 
 
@@ -1437,9 +1271,6 @@ def draw_menu_tiles(frame):
     # Dodatkowe przesunięcie w dół, żeby zaznaczenie było widoczne na środku
     visible_items = int((list_panel_height - 20) / item_height)
     scroll_offset = max(0, selected_tile - visible_items // 2)
-
-    # Czcionka dla menu - większa niż font_large
-    menu_font = pygame.font.Font(None, 65)
 
     for i, tile in enumerate(filtered_tiles):
         actual_idx = i
@@ -1516,9 +1347,8 @@ def draw_menu_tiles(frame):
         screen.blit(text_surface, text_rect)
 
 
-    # Dolna belka z przyciskami
+    # Dolne przyciski (bez belki w tle)
     bottom_bar_y = SCREEN_HEIGHT - 80
-    pygame.draw.rect(screen, DARK_GRAY, (0, bottom_bar_y, SCREEN_WIDTH, 80))
 
     # Lewy dolny róg: WYJDZ / MENU
     exit_x = 40
@@ -1544,69 +1374,6 @@ def draw_menu_tiles(frame):
 
     set_x = ok_button_x - 150
     draw_text_with_outline("USTAW", font_large, WHITE, BLACK, set_x, exit_y)
-=======
-    # Dwie rzędy kafelków
-    tiles_per_row = 3
-    tile_width = 350
-    tile_height = 250
-    spacing_x = 40
-    spacing_y = 40
-    
-    # Oblicz pozycję startową dla wycentrowania
-    total_width = tiles_per_row * tile_width + (tiles_per_row - 1) * spacing_x
-    start_x = (SCREEN_WIDTH - total_width) // 2
-    start_y = 180
-    
-    for i, tile in enumerate(menu_tiles):
-        row = i // tiles_per_row
-        col = i % tiles_per_row
-        
-        x = start_x + col * (tile_width + spacing_x)
-        y = start_y + row * (tile_height + spacing_y)
-        
-        is_selected = (i == selected_tile)
-        
-        if is_selected:
-            pygame.draw.rect(screen, BLUE, (x, y, tile_width, tile_height), border_radius=20)
-            pygame.draw.rect(screen, YELLOW, (x, y, tile_width, tile_height), 6, border_radius=20)
-        else:
-            pygame.draw.rect(screen, DARK_GRAY, (x, y, tile_width, tile_height), border_radius=20)
-            pygame.draw.rect(screen, GRAY, (x, y, tile_width, tile_height), 3, border_radius=20)
-        
-        icon_size = 100
-        icon_y = y + 40
-        draw_text(tile["icon"], font_medium, WHITE, x + tile_width // 2, icon_y, center=True)
-        
-        title_y = icon_y + 80
-        draw_text(tile["title"], font_medium, WHITE if not is_selected else YELLOW, 
-                 x + tile_width // 2, title_y, center=True)
-        
-        desc_y = title_y + 45
-        draw_text(tile["description"], font_tiny, GRAY if not is_selected else WHITE, 
-                 x + tile_width // 2, desc_y, center=True)
-    
-    # Przycisk reset na dole
-    reset_y = start_y + 2 * (tile_height + spacing_y) - 40
-    reset_width = 600
-    reset_height = 80
-    reset_x = (SCREEN_WIDTH - reset_width) // 2
-    
-    is_reset_selected = (selected_tile == -1)
-    
-    if is_reset_selected:
-        pygame.draw.rect(screen, RED, (reset_x, reset_y, reset_width, reset_height), border_radius=15)
-        pygame.draw.rect(screen, YELLOW, (reset_x, reset_y, reset_width, reset_height), 6, border_radius=15)
-    else:
-        pygame.draw.rect(screen, RED, (reset_x, reset_y, reset_width, reset_height), border_radius=15)
-        pygame.draw.rect(screen, WHITE, (reset_x, reset_y, reset_width, reset_height), 2, border_radius=15)
-    
-    draw_text("[RESET] RESET DO FABRYCZNYCH", font_medium, WHITE, 
-             SCREEN_WIDTH // 2, reset_y + reset_height // 2, center=True)
-    
-    instructions = "Left/Right: Nawigacja | Down: Reset | OK: Wybierz | MENU: Zamknij"
-    draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, 
-             center=True, bg_color=BLACK, padding=10)
->>>>>>> 20f45e4f977b82835052411b9db354e7bf1b5fd2
 
 
 def draw_submenu_screen(frame):
@@ -1650,10 +1417,6 @@ def draw_submenu_screen(frame):
         
         elif item["type"] == "spacer":
             y += 20
-        
-        elif item["type"] == "info":
-            draw_text(item["text"], font_tiny, LIGHT_BLUE, menu_x + menu_width // 2, y + 5, center=True)
-            y += 30
         
         elif item["type"] == "slider":
             is_selected = (actual_idx == submenu_selected)
@@ -1763,22 +1526,27 @@ def draw_submenu_screen(frame):
             
             y += item_height
         
+        elif item["type"] == "info":
+            # Wyświetl tekst informacyjny (nie można go zaznaczyć)
+            draw_text(item["text"], font_tiny, GRAY, menu_x + menu_width // 2, y + 10, center=True)
+            y += 30
+
         elif item["type"] == "button":
             is_selected = (actual_idx == submenu_selected)
-            
+
             button_color = RED if "RESET" in item["label"] else GREEN
-            
+
             if is_selected:
-                pygame.draw.rect(screen, button_color, 
+                pygame.draw.rect(screen, button_color,
                                (menu_x + 100, y - 5, menu_width - 200, item_height - 10), border_radius=15)
-                pygame.draw.rect(screen, YELLOW, 
+                pygame.draw.rect(screen, YELLOW,
                                (menu_x + 100, y - 5, menu_width - 200, item_height - 10), 5, border_radius=15)
             else:
-                pygame.draw.rect(screen, button_color, 
+                pygame.draw.rect(screen, button_color,
                                (menu_x + 100, y - 5, menu_width - 200, item_height - 10), border_radius=15)
-            
+
             draw_text(item["label"], font_medium, WHITE, menu_x + menu_width // 2, y + 20, center=True)
-            
+
             y += item_height + 10
     
     if submenu_editing:
@@ -1925,29 +1693,6 @@ def draw_battery_icon():
     
     # Wyłącz clipping
     screen.set_clip(None)
-
-
-def draw_stabilization_indicator():
-    """Rysuj wskaźnik stabilizacji gdy jest włączona"""
-    if not camera_settings.get("stabilization_enabled", False):
-        return
-    
-    # Pozycja - lewy górny róg, pod przyciskiem MENU
-    indicator_x = 20
-    indicator_y = 85
-    indicator_width = 100
-    indicator_height = 40
-    
-    # Tło
-    bg_surface = pygame.Surface((indicator_width, indicator_height), pygame.SRCALPHA)
-    bg_surface.fill((0, 100, 255, 150))
-    screen.blit(bg_surface, (indicator_x, indicator_y))
-    
-    # Ramka
-    pygame.draw.rect(screen, BLUE, (indicator_x, indicator_y, indicator_width, indicator_height), 3, border_radius=8)
-    
-    # Tekst
-    draw_text_with_outline("STAB", font_small, WHITE, BLACK, indicator_x + indicator_width // 2, indicator_y + indicator_height // 2, center=True)
 
 
 def draw_zoom_bar():
@@ -2257,32 +2002,63 @@ def videos_navigate_right():
 # INICJALIZACJA
 # ============================================================================
 
+def load_fonts():
+    """Załaduj wszystkie czcionki na podstawie wybranej font_family"""
+    global font_large, font_medium, font_small, font_tiny, menu_font
+
+    font_family = camera_settings.get("font_family", "HomeVideo")
+
+    # Sprawdź czy czcionka istnieje w definicjach
+    if font_family not in FONT_DEFINITIONS:
+        font_family = "HomeVideo"  # Fallback do domyślnej
+
+    font_config = FONT_DEFINITIONS[font_family]
+    font_path = font_config["path"]
+    font_scale = font_config["scale"]
+
+    try:
+        # Załaduj czcionkę niestandardową
+        font_large = pygame.font.Font(font_path, int(60 * font_scale))
+        font_medium = pygame.font.Font(font_path, int(40 * font_scale))
+        font_small = pygame.font.Font(font_path, int(30 * font_scale))
+        font_tiny = pygame.font.Font(font_path, int(24 * font_scale))
+        menu_font = pygame.font.Font(font_path, int(65 * font_scale))
+        print(f"[OK] Czcionka załadowana: {font_family}")
+    except Exception as e:
+        # Jeśli nie udało się załadować, użyj domyślnej czcionki systemowej
+        print(f"[WARN] Nie można załadować czcionki {font_family}: {e}")
+        print("[INFO] Używam domyślnej czcionki systemowej")
+        font_large = pygame.font.Font(None, 60)
+        font_medium = pygame.font.Font(None, 40)
+        font_small = pygame.font.Font(None, 30)
+        font_tiny = pygame.font.Font(None, 24)
+        menu_font = pygame.font.Font(None, 65)
+
+
 def init_pygame():
     """Inicjalizuj pygame"""
-    global screen, font_large, font_medium, font_small, font_tiny, SCREEN_WIDTH, SCREEN_HEIGHT
-    
+    global screen, SCREEN_WIDTH, SCREEN_HEIGHT
+
     print("[INIT] Pygame init...")
     pygame.init()
-    
+
     info = pygame.display.Info()
     SCREEN_WIDTH = info.current_w
     SCREEN_HEIGHT = info.current_h
-    
+
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN)
     pygame.display.set_caption("Kamera System")
     pygame.mouse.set_visible(False)
-    
-    font_large = pygame.font.Font(None, 60)
-    font_medium = pygame.font.Font(None, 40)
-    font_small = pygame.font.Font(None, 30)
-    font_tiny = pygame.font.Font(None, 24)
-    
+
+    # Załaduj czcionki
+    load_fonts()
+
     screen.fill(BLACK)
     pygame.display.flip()
-    
+
     # Wczytaj ikony SD
     load_sd_icons()
-    
+
     print("[OK] Pygame OK")
 
 
@@ -2306,13 +2082,6 @@ def init_camera():
     apply_camera_settings()
     
     print(f"[OK] Kamera OK: {resolution}")
-
-
-def init_stabilizer():
-    """Inicjalizuj stabilizator"""
-    global stabilizer
-    stabilizer = VideoStabilizer(smoothing_radius=30, max_corners=200)
-    print("[OK] Stabilizator zainicjalizowany")
 
 
 # ============================================================================
@@ -2532,17 +2301,11 @@ def draw_main_screen(frame):
     
     if frame is not None:
         try:
-            # Zastosuj stabilizację jeśli włączona
-            if camera_settings.get("stabilization_enabled", False) and stabilizer:
-                strength = camera_settings.get("stabilization_strength", 0.5)
-                frame = stabilizer.stabilize_frame(frame, strength)
-            
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_resized = cv2.resize(frame_rgb, (SCREEN_WIDTH, SCREEN_HEIGHT))
             frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
             screen.blit(frame_surface, (0, 0))
-        except Exception as e:
-            print(f"[WARN] Błąd wyświetlania: {e}")
+        except:
             draw_text("[CAM] Kamera", font_large, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
     
     draw_grid_overlay()
@@ -2556,7 +2319,6 @@ def draw_main_screen(frame):
         draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
                  font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
-    draw_stabilization_indicator()
     draw_zoom_bar()
     draw_recording_indicator()
 
@@ -3145,6 +2907,14 @@ def handle_ok():
                     save_config()
                     print(f"[SELECT] Pozycja daty: {camera_settings['date_position']}")
 
+                elif tile_id == "font":
+                    current_idx = FONT_NAMES.index(camera_settings.get("font_family", "HomeVideo"))
+                    new_idx = (current_idx + 1) % len(FONT_NAMES)
+                    camera_settings["font_family"] = FONT_NAMES[new_idx]
+                    save_config()
+                    load_fonts()  # Przeładuj czcionki
+                    print(f"[SELECT] Czcionka: {camera_settings['font_family']}")
+
                 # Dla sliderów otwórz submenu do precyzyjnej edycji
                 elif tile_id in ["brightness", "contrast", "saturation", "sharpness", "exposure", "battery_level"]:
                     # Mapowanie tile_id na section
@@ -3332,7 +3102,6 @@ if __name__ == '__main__':
     
     init_pygame()
     init_camera()
-    init_stabilizer()
     
     print("\n[GPIO] GPIO init...")
     btn_record = Button(PIN_RECORD, pull_up=True, bounce_time=0.3)
@@ -3365,7 +3134,6 @@ if __name__ == '__main__':
     print("[SYSTEM] SYSTEM KAMERA - RASPBERRY PI 5")
     print("="*70)
     print("[MAIN] Kamera | [REC] Record | [VIDEOS] Videos | [CONFIG] Menu | [ZOOM] +/- Zoom")
-    print("[STAB] Stabilizacja włączana w menu")
     print("="*70 + "\n")
     
     clock = pygame.time.Clock()
