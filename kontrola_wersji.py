@@ -117,6 +117,8 @@ submenu_edit_value = ""
 current_submenu = None
 last_menu_scroll = 0
 last_videos_scroll = 0
+menu_editing_mode = False  # True = edytujemy wartości, False = wybieramy sekcję
+selected_section = 0  # Indeks wybranej sekcji (0-3: VIDEO, CONFIG, DATE, BATT)
 
 # SD Card Icons
 sd_icon_surface = None
@@ -730,33 +732,93 @@ def add_date_overlay_to_video(video_path):
 # ============================================================================
 
 def init_menu_tiles():
-    """Inicjalizuj kafelki głównego menu"""
+    """Inicjalizuj kafelki głównego menu - listowy układ"""
     global menu_tiles
-    
+
     menu_tiles = [
         {
             "id": "quality",
-            "title": "Image Quality/Size",
+            "label": "Rozdzielczosc",
+            "value": lambda: camera_settings.get("video_resolution", "1080p30"),
             "icon": "[VIDEO]",
-            "description": "Rozdzielczość i FPS"
+            "section": "Image Quality/Size"
         },
         {
-            "id": "manual",
-            "title": "Manual Settings",
+            "id": "grid",
+            "label": "Siatka pomocnicza",
+            "value": lambda: "WL." if camera_settings.get("show_grid", False) else "WYL.",
+            "icon": "[VIDEO]",
+            "section": "Image Quality/Size"
+        },
+        {
+            "id": "wb",
+            "label": "White Balance",
+            "value": lambda: camera_settings.get("awb_mode", "auto"),
             "icon": "[CONFIG]",
-            "description": "Parametry kamery"
+            "section": "Manual Settings"
         },
         {
-            "id": "date",
-            "title": "Znacznik Daty",
+            "id": "brightness",
+            "label": "Jasnosc",
+            "value": lambda: f"{camera_settings.get('brightness', 0.0):.1f}",
+            "icon": "[CONFIG]",
+            "section": "Manual Settings"
+        },
+        {
+            "id": "contrast",
+            "label": "Kontrast",
+            "value": lambda: f"{camera_settings.get('contrast', 1.0):.1f}",
+            "icon": "[CONFIG]",
+            "section": "Manual Settings"
+        },
+        {
+            "id": "saturation",
+            "label": "Saturacja",
+            "value": lambda: f"{camera_settings.get('saturation', 1.0):.1f}",
+            "icon": "[CONFIG]",
+            "section": "Manual Settings"
+        },
+        {
+            "id": "sharpness",
+            "label": "Ostrosc",
+            "value": lambda: f"{camera_settings.get('sharpness', 1.0):.1f}",
+            "icon": "[CONFIG]",
+            "section": "Manual Settings"
+        },
+        {
+            "id": "exposure",
+            "label": "Ekspozycja",
+            "value": lambda: f"{camera_settings.get('exposure_compensation', 0.0):.1f}",
+            "icon": "[CONFIG]",
+            "section": "Manual Settings"
+        },
+        {
+            "id": "show_date",
+            "label": "Pokaz date",
+            "value": lambda: "WL." if camera_settings.get("show_date", False) else "WYL.",
             "icon": "[DATE]",
-            "description": "Data na filmie"
+            "section": "Znacznik Daty"
         },
         {
-            "id": "battery",
-            "title": "Poziom Baterii",
+            "id": "show_time",
+            "label": "Pokaz godzine",
+            "value": lambda: "WL." if camera_settings.get("show_time", False) else "WYL.",
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
+            "id": "date_position",
+            "label": "Pozycja daty",
+            "value": lambda: camera_settings.get("date_position", "top_left"),
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
+            "id": "battery_level",
+            "label": "Fikcyjny poziom",
+            "value": lambda: f"{fake_battery_level}%" if fake_battery_level is not None else "Rzeczywisty",
             "icon": "[BATT]",
-            "description": "Testowy poziom baterii"
+            "section": "Poziom Baterii"
         }
     ]
 
@@ -771,36 +833,36 @@ def init_submenu(tile_id):
         submenu_items = [
             {"type": "header", "text": "[VIDEO] IMAGE QUALITY/SIZE"},
             {"type": "spacer"},
-            {"type": "select", "label": "Rozdzielczość", "key": "video_resolution", "options": VIDEO_RESOLUTIONS},
+            {"type": "select", "label": "Rozdzielczosc", "key": "video_resolution", "options": VIDEO_RESOLUTIONS},
             {"type": "toggle", "label": "Siatka pomocnicza", "key": "show_grid"},
             {"type": "spacer"},
-            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
+            {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
         ]
-    
+
     elif tile_id == "manual":
         submenu_items = [
             {"type": "header", "text": "[CONFIG] MANUAL SETTINGS"},
             {"type": "spacer"},
             {"type": "select", "label": "White Balance", "key": "awb_mode", "options": WB_MODES},
-            {"type": "slider", "label": "Jasność", "key": "brightness", "min": -1.0, "max": 1.0, "step": 0.1},
+            {"type": "slider", "label": "Jasnosc", "key": "brightness", "min": -1.0, "max": 1.0, "step": 0.1},
             {"type": "slider", "label": "Kontrast", "key": "contrast", "min": 0.0, "max": 2.0, "step": 0.1},
             {"type": "slider", "label": "Saturacja", "key": "saturation", "min": 0.0, "max": 2.0, "step": 0.1},
-            {"type": "slider", "label": "Ostrość", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
+            {"type": "slider", "label": "Ostrosc", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
             {"type": "slider", "label": "Ekspozycja", "key": "exposure_compensation", "min": -2.0, "max": 2.0, "step": 0.2},
             {"type": "spacer"},
-            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
+            {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
         ]
-    
+
     elif tile_id == "date":
         submenu_items = [
             {"type": "header", "text": "[DATE] ZNACZNIK DATY"},
             {"type": "spacer"},
-            {"type": "toggle", "label": "Pokaż datę", "key": "show_date"},
-            {"type": "toggle", "label": "Pokaż godzinę", "key": "show_time"},
+            {"type": "toggle", "label": "Pokaz date", "key": "show_date"},
+            {"type": "toggle", "label": "Pokaz godzine", "key": "show_time"},
             {"type": "select", "label": "Pozycja daty", "key": "date_position", "options": DATE_POSITIONS},
-            {"type": "text", "label": "Ręczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
+            {"type": "text", "label": "Reczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
             {"type": "spacer"},
-            {"type": "button", "label": "[RESET] RESET USTAWIEŃ", "action": "reset_section"},
+            {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
         ]
 
     elif tile_id == "battery":
@@ -809,16 +871,18 @@ def init_submenu(tile_id):
             {"type": "spacer"},
             {"type": "battery_slider", "label": "Fikcyjny poziom", "key": "fake_battery", "min": 0, "max": 100, "step": 5},
             {"type": "spacer"},
-            {"type": "button", "label": "[RESET] UŻYJ RZECZYWISTEGO", "action": "reset_battery"},
+            {"type": "button", "label": "[RESET] UZYJ RZECZYWISTEGO", "action": "reset_battery"},
         ]
 
 
 def open_menu():
     """Otwórz menu główne"""
-    global current_state, selected_tile
-    
+    global current_state, selected_tile, menu_editing_mode, selected_section
+
     init_menu_tiles()
     selected_tile = 0
+    selected_section = 0
+    menu_editing_mode = False
     current_state = STATE_MENU
     print("\n[MENU] MENU OTWARTE")
 
@@ -857,31 +921,47 @@ def close_submenu():
 
 
 def menu_navigate_left():
-    """Nawigacja w lewo"""
-    global selected_tile
-    if current_state == STATE_MENU:
-        selected_tile = max(0, selected_tile - 1)
+    """Nawigacja w lewo - wyjście z trybu edycji"""
+    global menu_editing_mode
+    if current_state == STATE_MENU and menu_editing_mode:
+        menu_editing_mode = False
+        print("[MENU] Wyjście z trybu edycji - wybór sekcji")
 
 
 def menu_navigate_right():
-    """Nawigacja w prawo"""
-    global selected_tile
-    if current_state == STATE_MENU:
-        selected_tile = min(len(menu_tiles) - 1, selected_tile + 1)
+    """Nawigacja w prawo - wejście do trybu edycji wartości"""
+    global menu_editing_mode, selected_tile
+    if current_state == STATE_MENU and not menu_editing_mode:
+        menu_editing_mode = True
+        selected_tile = 0
+        print("[MENU] Wejście do trybu edycji wartości")
 
 
 def menu_navigate_down():
-    """Nawigacja w dół"""
-    global selected_tile
+    """Nawigacja w dół - wybór sekcji lub przewijanie opcji"""
+    global selected_section, selected_tile
     if current_state == STATE_MENU:
-        selected_tile = -1
+        if menu_editing_mode:
+            # W trybie edycji: przewijaj opcje w dół
+            section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+            current_section_name = section_names[selected_section]
+            filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+            selected_tile = min(len(filtered_tiles) - 1, selected_tile + 1)
+        else:
+            # Wybór sekcji: przełącz na następną sekcję
+            selected_section = min(3, selected_section + 1)
 
 
 def menu_navigate_up():
-    """Nawigacja w górę"""
-    global selected_tile
-    if current_state == STATE_MENU and selected_tile == -1:
-        selected_tile = 1
+    """Nawigacja w górę - wybór sekcji lub przewijanie opcji"""
+    global selected_section, selected_tile
+    if current_state == STATE_MENU:
+        if menu_editing_mode:
+            # W trybie edycji: przewijaj opcje w górę
+            selected_tile = max(0, selected_tile - 1)
+        else:
+            # Wybór sekcji: przełącz na poprzednią sekcję
+            selected_section = max(0, selected_section - 1)
 
 
 def submenu_navigate_up():
@@ -976,7 +1056,7 @@ def submenu_ok():
 
 
 def draw_menu_tiles(frame):
-    """Rysuj kafelki menu"""
+    """Rysuj menu z sekcjami pionowo po lewej stronie - ZMODYFIKOWANY UKŁAD"""
     if frame is not None:
         try:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -987,64 +1067,203 @@ def draw_menu_tiles(frame):
             screen.fill(BLACK)
     else:
         screen.fill(BLACK)
-    
+
     overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
     overlay.set_alpha(220)
     overlay.fill(BLACK)
     screen.blit(overlay, (0, 0))
+
+    # Wymiary paneli
+    # Panel z sekcjami
+    section_icon_size = 75
+    section_panel_width = section_icon_size + 20
+    section_height = section_icon_size
     
-    draw_text("[CONFIG] USTAWIENIA", font_large, YELLOW, SCREEN_WIDTH // 2, 60, center=True)
+    # Panel z opcjami
+    list_panel_margin = 30
+    list_panel_x = section_panel_width + list_panel_margin
+    list_panel_y = list_panel_margin
+    list_panel_width = SCREEN_WIDTH - list_panel_x - list_panel_margin
+    list_panel_height = SCREEN_HEIGHT - list_panel_y - 100 # Odejmujemy więcej, żeby zostawić miejsce na dolną belkę
+
+    # Rysuj ramkę panelu z opcjami (prawy)
+    pygame.draw.rect(screen, DARK_GRAY, (list_panel_x, list_panel_y, list_panel_width, list_panel_height), border_radius=10)
+    pygame.draw.rect(screen, LIGHT_BLUE, (list_panel_x, list_panel_y, list_panel_width, list_panel_height), 3, border_radius=10)
+
+
+    # Sekcje po lewej stronie (pionowo, jedna pod drugą)
+    sections = [
+        {"icon": "[V]", "name": "Image Quality/Size"},
+        {"icon": "[C]", "name": "Manual Settings"},
+        {"icon": "[D]", "name": "Znacznik Daty"},
+        {"icon": "[B]", "name": "Poziom Baterii"}
+    ]
+
+    section_x = list_panel_margin
+    section_start_y = list_panel_y
     
-    tile_width = 350
-    tile_height = 250
-    spacing = 40
-    start_x = (SCREEN_WIDTH - (tile_width * 3 + spacing * 2)) // 2
-    tile_y = 180
-    
-    for i, tile in enumerate(menu_tiles):
-        x = start_x + i * (tile_width + spacing)
-        
-        is_selected = (i == selected_tile)
-        
-        if is_selected:
-            pygame.draw.rect(screen, BLUE, (x, tile_y, tile_width, tile_height), border_radius=20)
-            pygame.draw.rect(screen, YELLOW, (x, tile_y, tile_width, tile_height), 6, border_radius=20)
+    # Rysowanie sekcji i łączenie z panelem po prawej
+    for i, section in enumerate(sections):
+        y = section_start_y + i * section_height
+        is_selected = (i == selected_section)
+
+        # Rysuj tło i ramkę sekcji
+        if is_selected and not menu_editing_mode:
+            # Kolor wybrany
+            bg_color = (60, 60, 60)
+            border_color = YELLOW
         else:
-            pygame.draw.rect(screen, DARK_GRAY, (x, tile_y, tile_width, tile_height), border_radius=20)
-            pygame.draw.rect(screen, GRAY, (x, tile_y, tile_width, tile_height), 3, border_radius=20)
-        
-        icon_size = 100
-        icon_y = tile_y + 40
-        draw_text(tile["icon"], font_medium, WHITE, x + tile_width // 2, icon_y, center=True)
-        
-        title_y = icon_y + 80
-        draw_text(tile["title"], font_medium, WHITE if not is_selected else YELLOW, 
-                 x + tile_width // 2, title_y, center=True)
-        
-        desc_y = title_y + 45
-        draw_text(tile["description"], font_tiny, GRAY if not is_selected else WHITE, 
-                 x + tile_width // 2, desc_y, center=True)
-    
-    reset_y = tile_y + tile_height + 60
-    reset_width = 600
-    reset_height = 80
-    reset_x = (SCREEN_WIDTH - reset_width) // 2
-    
-    is_reset_selected = (selected_tile == -1)
-    
-    if is_reset_selected:
-        pygame.draw.rect(screen, RED, (reset_x, reset_y, reset_width, reset_height), border_radius=15)
-        pygame.draw.rect(screen, YELLOW, (reset_x, reset_y, reset_width, reset_height), 6, border_radius=15)
-    else:
-        pygame.draw.rect(screen, RED, (reset_x, reset_y, reset_width, reset_height), border_radius=15)
-        pygame.draw.rect(screen, WHITE, (reset_x, reset_y, reset_width, reset_height), 2, border_radius=15)
-    
-    draw_text("[RESET] RESET DO FABRYCZNYCH", font_medium, WHITE, 
-             SCREEN_WIDTH // 2, reset_y + reset_height // 2, center=True)
-    
-    instructions = "Left/Right: Nawigacja | Down: Reset | OK: Wybierz | MENU: Zamknij"
-    draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, 
-             center=True, bg_color=BLACK, padding=10)
+            # Kolor niewybrany
+            bg_color = (30, 30, 30)
+            border_color = GRAY
+
+        # Rysuj prostokąt
+        rect_style = border_radius=10
+        if is_selected and not menu_editing_mode:
+            # Jeśli wybrany i nie edytujemy, prostokąt łączy się z prawej
+            pygame.draw.rect(screen, bg_color, (section_x, y, section_panel_width, section_height), rect_style)
+            
+            # Rysuj ramkę z pominięciem prawej krawędzi
+            pygame.draw.line(screen, border_color, (section_x, y), (section_x + section_panel_width, y), 3) # Góra
+            pygame.draw.line(screen, border_color, (section_x, y + section_height), (section_x + section_panel_width, y + section_height), 3) # Dół
+            pygame.draw.line(screen, border_color, (section_x, y), (section_x, y + section_height), 3) # Lewa
+            
+            # Wypełnij szczelinę między sekcją a panelem głównym
+            pygame.draw.rect(screen, bg_color, (section_x + section_panel_width - 3, y + 1, list_panel_x - (section_x + section_panel_width) + 6, section_height - 2))
+            
+        else:
+            # Standardowy prostokąt z pełną ramką
+            pygame.draw.rect(screen, bg_color, (section_x, y, section_panel_width, section_height), rect_style)
+            pygame.draw.rect(screen, border_color, (section_x, y, section_panel_width, section_height), 3, rect_style)
+
+
+        # Ikona
+        icon_color = YELLOW if is_selected else WHITE
+        draw_text(section["icon"], font_large, icon_color, 
+                  section_x + section_panel_width // 2, y + section_height // 2, center=True)
+
+
+    # Panel z listą opcji dla wybranej sekcji (po prawej)
+    # Filtruj opcje dla aktualnej sekcji
+    section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+    current_section_name = section_names[selected_section]
+
+    filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+
+    # Rysuj elementy listy
+    item_height = 70
+    item_y = list_panel_y + 10
+
+    # Dodatkowe przesunięcie w dół, żeby zaznaczenie było widoczne na środku
+    visible_items = int((list_panel_height - 20) / item_height)
+    scroll_offset = max(0, selected_tile - visible_items // 2)
+
+    # Czcionka dla menu - większa niż font_large
+    menu_font = pygame.font.Font(None, 65)
+
+    for i, tile in enumerate(filtered_tiles):
+        actual_idx = i
+
+        # Opcje poza zakresem widoku
+        if actual_idx < scroll_offset or actual_idx >= scroll_offset + visible_items:
+            continue
+
+        is_selected = (actual_idx == selected_tile and menu_editing_mode)
+        current_y = item_y + (actual_idx - scroll_offset) * item_height
+
+        # Tło zaznaczonego elementu
+        if is_selected:
+            # Gradient: ciemno granatowy na górze, jasnoniebieski na dole (1/3 wysokości)
+            rect_x = list_panel_x + 5
+            rect_y = current_y - 5
+            rect_w = list_panel_width - 10
+            rect_h = item_height
+
+            # Ciemno granatowy kolor dla dolnych 2/3
+            dark_navy = (15, 30, 60)
+            # Jasnoniebieski dla górnej 1/3
+            light_blue = (100, 150, 255)
+
+            # Rysuj gradient - górna 1/3 z przejściem
+            gradient_height = rect_h // 3
+            for y_offset in range(rect_h):
+                if y_offset < gradient_height:
+                    # Gradient od jasnego do ciemnego
+                    ratio = y_offset / gradient_height
+                    r = int(light_blue[0] * (1 - ratio) + dark_navy[0] * ratio)
+                    g = int(light_blue[1] * (1 - ratio) + dark_navy[1] * ratio)
+                    b = int(light_blue[2] * (1 - ratio) + dark_navy[2] * ratio)
+                    color = (r, g, b)
+                else:
+                    # Ciemno granatowy dla reszty
+                    color = dark_navy
+
+                pygame.draw.line(screen, color,
+                               (rect_x, rect_y + 8 + y_offset),
+                               (rect_x + rect_w, rect_y + 8 + y_offset))
+
+            # Białe obramowanie - wydłużone o 2 piksele w dół
+            pygame.draw.rect(screen, WHITE,
+                             (rect_x, rect_y + 8, rect_w, rect_h + 6), 5,
+                             border_radius=8)
+
+        # Label po lewej - z czarnym outline
+        label_color = YELLOW if is_selected else WHITE
+        draw_text_with_outline(tile["label"].upper(), menu_font, label_color, BLACK, list_panel_x + 25, current_y + 20)
+
+        # Value po prawej - z czarnym outline
+        try:
+            value_text = tile["value"]() if callable(tile["value"]) else str(tile["value"])
+        except:
+            value_text = "---"
+
+        value_color = YELLOW if is_selected else WHITE
+        value_x = list_panel_x + list_panel_width - 25
+
+        # Rysuj czarny outline dla value
+        outline_width = 2
+        for dx in range(-outline_width, outline_width + 1):
+            for dy in range(-outline_width, outline_width + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                text_surface_outline = menu_font.render(value_text.upper(), True, BLACK)
+                text_rect_outline = text_surface_outline.get_rect(topright=(value_x + dx, current_y + 20 + dy))
+                screen.blit(text_surface_outline, text_rect_outline)
+
+        # Rysuj właściwy tekst value
+        text_surface = menu_font.render(value_text.upper(), True, value_color)
+        text_rect = text_surface.get_rect(topright=(value_x, current_y + 20))
+        screen.blit(text_surface, text_rect)
+
+
+    # Dolna belka z przyciskami
+    bottom_bar_y = SCREEN_HEIGHT - 80
+    pygame.draw.rect(screen, DARK_GRAY, (0, bottom_bar_y, SCREEN_WIDTH, 80))
+
+    # Lewy dolny róg: WYJDZ / MENU
+    exit_x = 40
+    exit_y = bottom_bar_y + 15
+    draw_text_with_outline("WYJDZ", font_large, WHITE, BLACK, exit_x, exit_y)
+
+    menu_button_x = exit_x + 150
+    menu_button_width = 140
+    menu_button_height = 45
+    pygame.draw.rect(screen, WHITE, (menu_button_x + 10, exit_y - 5, menu_button_width, menu_button_height),
+                     border_radius=10)
+    draw_text("MENU", font_large, BLACK, menu_button_x + 10 + menu_button_width // 2,
+              exit_y + menu_button_height // 2 - 5, center=True)
+
+    # Prawy dolny róg: USTAW / OK
+    ok_button_width = 100
+    ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
+    ok_button_height = 45
+    pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
+                     border_radius=10)
+    draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
+              exit_y + ok_button_height // 2 - 5, center=True)
+
+    set_x = ok_button_x - 150
+    draw_text_with_outline("USTAW", font_large, WHITE, BLACK, set_x, exit_y)
 
 
 def draw_submenu_screen(frame):
@@ -1973,8 +2192,8 @@ def draw_videos_screen():
         draw_text("[VIDEOS] NAGRANE FILMY", font_large, WHITE, SCREEN_WIDTH // 2, 50, center=True)
 
     if not videos:
-        draw_text("[EMPTY] Brak filmów", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
-        draw_text("Zamknij i naciśnij Record", font_small, DARK_GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
+        draw_text("[EMPTY] Brak filmow", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
+        draw_text("Zamknij i nacisnij Record", font_small, DARK_GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
     else:
         # Ustawienia siatki
         cols = 3
@@ -2082,17 +2301,17 @@ def draw_videos_screen():
     # Instrukcje zależne od trybu
     if multi_select_mode:
         if selected_videos:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Delete: Usuń zaznaczone | Videos: Wróć",
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Delete: Usun zaznaczone | Videos: Wroc",
                      font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 40, center=True)
         else:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Videos: Wróć",
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Videos: Wroc",
                      font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 40, center=True)
     else:
         if selected_videos:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtwórz | Menu: Opcje | Delete: Usuń zaznaczone | Videos: Wróć",
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtworz | Menu: Opcje | Delete: Usun zaznaczone | Videos: Wroc",
                      font_small, WHITE, SCREEN_WIDTH // 2, panel_y + 40, center=True)
         else:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtwórz | Menu: Opcje | Delete: Usuń | Videos: Wróć",
+            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtworz | Menu: Opcje | Delete: Usun | Videos: Wroc",
                      font_small, WHITE, SCREEN_WIDTH // 2, panel_y + 40, center=True)
 
 
@@ -2115,8 +2334,8 @@ def draw_video_context_menu():
 
     # Opcje menu
     menu_options = [
-        {"label": "Zaznacz wiele filmów", "icon": "[SELECT]"},
-        {"label": "Pokaż informacje", "icon": "[INFO]"},
+        {"label": "Zaznacz wiele filmow", "icon": "[SELECT]"},
+        {"label": "Pokaz informacje", "icon": "[INFO]"},
     ]
 
     option_height = 80
@@ -2136,7 +2355,7 @@ def draw_video_context_menu():
         draw_text(f"{option['icon']} {option['label']}", font_medium, text_color,
                  SCREEN_WIDTH // 2, option_y + option_height // 2, center=True)
 
-    draw_text("Up/Down: Wybierz | OK: Zatwierdź | Menu: Wróć", font_small, GRAY,
+    draw_text("Up/Down: Wybierz | OK: Zatwierdz | Menu: Wroc", font_small, GRAY,
              SCREEN_WIDTH // 2, menu_y + menu_height - 40, center=True)
 
 
@@ -2190,7 +2409,7 @@ def draw_video_info_dialog():
     date_str = datetime.fromtimestamp(video.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
     draw_text(f"[DATE] Data nagrania: {date_str}", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 2, center=True)
 
-    # Długość filmu (jeśli możliwe)
+    # Dlugosc filmu (jesli mozliwe)
     try:
         cap = cv2.VideoCapture(str(video))
         if cap.isOpened():
@@ -2199,7 +2418,7 @@ def draw_video_info_dialog():
             duration = frame_count / fps if fps > 0 else 0
             minutes = int(duration // 60)
             seconds = int(duration % 60)
-            draw_text(f"[TIME] Długość: {minutes}:{seconds:02d}", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+            draw_text(f"[TIME] Dlugosc: {minutes}:{seconds:02d}", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
 
             # Format i FPS
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -2207,9 +2426,9 @@ def draw_video_info_dialog():
             draw_text(f"[VIDEO] Format: {width}x{height} @ {int(fps)} FPS", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 4, center=True)
             cap.release()
         else:
-            draw_text("[WARN] Nie można odczytać długości", font_small, GRAY, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+            draw_text("[WARN] Nie mozna odczytac dlugosci", font_small, GRAY, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
     except Exception as e:
-        draw_text(f"[ERROR] Błąd: {str(e)}", font_small, RED, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+        draw_text(f"[ERROR] Blad: {str(e)}", font_small, RED, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
 
     draw_text("OK lub Menu: Zamknij", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
 
@@ -2220,7 +2439,7 @@ def draw_playing_screen():
     
     if not video_capture:
         screen.fill(BLACK)
-        draw_text("[ERROR] Błąd odtwarzania", font_large, RED, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
+        draw_text("[ERROR] Blad odtwarzania", font_large, RED, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
         return
     
     if not video_paused:
@@ -2334,12 +2553,12 @@ def draw_confirm_dialog():
 
     if selected_videos:
         # Multi-delete
-        draw_text(f"Usunąć {len(selected_videos)} zaznaczonych filmów?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
+        draw_text(f"Usunac {len(selected_videos)} zaznaczonych filmow?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
         draw_text("Ta operacja jest nieodwracalna!", font_small, YELLOW, SCREEN_WIDTH // 2, dialog_y + 180, center=True)
     elif videos and 0 <= selected_index < len(videos):
         # Single delete
         video = videos[selected_index]
-        draw_text("Usunąć ten film?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
+        draw_text("Usunac ten film?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
 
         name = video.name
         if len(name) > 40:
@@ -2370,7 +2589,7 @@ def draw_confirm_dialog():
         pygame.draw.rect(screen, WHITE, (no_x, button_y, button_w, button_h), 2, border_radius=15)
     
     draw_text("[NO] NIE", font_large, WHITE, no_x + button_w // 2, button_y + button_h // 2, center=True)
-    draw_text("Left/Right: Wybierz | OK: Zatwierdź", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
+    draw_text("Left/Right: Wybierz | OK: Zatwierdz", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
 
 
 # ============================================================================
@@ -2493,10 +2712,68 @@ def handle_ok():
         current_state = STATE_VIDEOS
 
     elif current_state == STATE_MENU:
-        if selected_tile == -1:
-            reset_to_factory()
-        elif 0 <= selected_tile < len(menu_tiles):
-            open_submenu(menu_tiles[selected_tile]["id"])
+        if not menu_editing_mode:
+            # Jeśli nie jesteśmy w trybie edycji, OK wchodzi do trybu edycji (tak jak prawo)
+            menu_navigate_right()
+        elif menu_editing_mode:
+            # W trybie edycji: zmień wartość zaznaczonej opcji
+            section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+            current_section_name = section_names[selected_section]
+            filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+
+            if 0 <= selected_tile < len(filtered_tiles):
+                tile = filtered_tiles[selected_tile]
+                tile_id = tile["id"]
+
+                # Toggle dla opcji boolean
+                if tile_id in ["grid", "show_date", "show_time"]:
+                    key_map = {
+                        "grid": "show_grid",
+                        "show_date": "show_date",
+                        "show_time": "show_time"
+                    }
+                    key = key_map[tile_id]
+                    camera_settings[key] = not camera_settings.get(key, False)
+                    save_config()
+                    apply_camera_settings()
+                    print(f"[TOGGLE] {tile['label']}: {camera_settings[key]}")
+
+                # Cykliczne przełączanie dla select
+                elif tile_id == "quality":
+                    current_idx = VIDEO_RESOLUTIONS.index(camera_settings.get("video_resolution", "1080p30"))
+                    new_idx = (current_idx + 1) % len(VIDEO_RESOLUTIONS)
+                    camera_settings["video_resolution"] = VIDEO_RESOLUTIONS[new_idx]
+                    save_config()
+                    print(f"[SELECT] Rozdzielczość: {camera_settings['video_resolution']}")
+
+                elif tile_id == "wb":
+                    current_idx = WB_MODES.index(camera_settings.get("awb_mode", "auto"))
+                    new_idx = (current_idx + 1) % len(WB_MODES)
+                    camera_settings["awb_mode"] = WB_MODES[new_idx]
+                    save_config()
+                    apply_camera_settings()
+                    print(f"[SELECT] White Balance: {camera_settings['awb_mode']}")
+
+                elif tile_id == "date_position":
+                    current_idx = DATE_POSITIONS.index(camera_settings.get("date_position", "top_left"))
+                    new_idx = (current_idx + 1) % len(DATE_POSITIONS)
+                    camera_settings["date_position"] = DATE_POSITIONS[new_idx]
+                    save_config()
+                    print(f"[SELECT] Pozycja daty: {camera_settings['date_position']}")
+
+                # Dla sliderów otwórz submenu do precyzyjnej edycji
+                elif tile_id in ["brightness", "contrast", "saturation", "sharpness", "exposure", "battery_level"]:
+                    # Mapowanie tile_id na section
+                    section_map = {
+                        "brightness": "manual",
+                        "contrast": "manual",
+                        "saturation": "manual",
+                        "sharpness": "manual",
+                        "exposure": "manual",
+                        "battery_level": "battery"
+                    }
+                    if tile_id in section_map:
+                        open_submenu(section_map[tile_id])
 
     elif current_state == STATE_SUBMENU:
         submenu_ok()
@@ -2558,13 +2835,81 @@ def handle_right():
 
 
 def handle_zoom_in():
+    global fake_battery_level
     if current_state == STATE_MAIN:
         adjust_zoom(ZOOM_STEP)
+    elif current_state == STATE_MENU and menu_editing_mode:
+        # Zwiększ wartość liczbową dla zaznaczonego elementu (tylko w trybie edycji)
+        section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+        current_section_name = section_names[selected_section]
+        filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+
+        if 0 <= selected_tile < len(filtered_tiles):
+            tile = filtered_tiles[selected_tile]
+            tile_id = tile["id"]
+
+            if tile_id == "brightness":
+                camera_settings["brightness"] = min(1.0, camera_settings.get("brightness", 0.0) + 0.1)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "contrast":
+                camera_settings["contrast"] = min(2.0, camera_settings.get("contrast", 1.0) + 0.1)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "saturation":
+                camera_settings["saturation"] = min(2.0, camera_settings.get("saturation", 1.0) + 0.1)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "sharpness":
+                camera_settings["sharpness"] = min(4.0, camera_settings.get("sharpness", 1.0) + 0.2)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "exposure":
+                camera_settings["exposure_compensation"] = min(2.0, camera_settings.get("exposure_compensation", 0.0) + 0.2)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "battery_level":
+                current_level = fake_battery_level if fake_battery_level is not None else 100
+                fake_battery_level = min(100, current_level + 5)
 
 
 def handle_zoom_out():
+    global fake_battery_level
     if current_state == STATE_MAIN:
         adjust_zoom(-ZOOM_STEP)
+    elif current_state == STATE_MENU and menu_editing_mode:
+        # Zmniejsz wartość liczbową dla zaznaczonego elementu (tylko w trybie edycji)
+        section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+        current_section_name = section_names[selected_section]
+        filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+
+        if 0 <= selected_tile < len(filtered_tiles):
+            tile = filtered_tiles[selected_tile]
+            tile_id = tile["id"]
+
+            if tile_id == "brightness":
+                camera_settings["brightness"] = max(-1.0, camera_settings.get("brightness", 0.0) - 0.1)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "contrast":
+                camera_settings["contrast"] = max(0.0, camera_settings.get("contrast", 1.0) - 0.1)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "saturation":
+                camera_settings["saturation"] = max(0.0, camera_settings.get("saturation", 1.0) - 0.1)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "sharpness":
+                camera_settings["sharpness"] = max(0.0, camera_settings.get("sharpness", 1.0) - 0.2)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "exposure":
+                camera_settings["exposure_compensation"] = max(-2.0, camera_settings.get("exposure_compensation", 0.0) - 0.2)
+                apply_camera_settings()
+                save_config()
+            elif tile_id == "battery_level":
+                current_level = fake_battery_level if fake_battery_level is not None else 100
+                fake_battery_level = max(0, current_level - 5)
 
 
 def cleanup(signum=None, frame=None):
