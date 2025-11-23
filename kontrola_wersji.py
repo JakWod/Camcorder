@@ -155,19 +155,27 @@ VIDEO_RESOLUTIONS = ["1080p30", "1080p60", "720p30", "720p60", "4K30"]
 FONT_DEFINITIONS = {
     "HomeVideo": {
         "path": "/home/pi/fonts/home_video/HomeVideo-Regular.otf",
-        "scale": 0.769
+        "scale": 0.769,
+        "polish_offset": 0,      # Offset dla polskich znaków
+        "general_offset": 0      # Ogólny offset dla całej czcionki
     },
     "Faithful": {
         "path": "/home/pi/fonts/compliance_sans/Faithful.ttf",
-        "scale": 0.923
+        "scale": 0.923,
+        "polish_offset": -5,
+        "general_offset": -5
     },
     "DigitalPixel": {
         "path": "/home/pi/fonts/digital_pixel_v123/DigitalPixelV123-Regular.otf",
-        "scale": 0.385
+        "scale": 0.385,
+        "polish_offset": -3,
+        "general_offset": -5
     },
     "DigitalPixel2": {
         "path": "/home/pi/fonts/digital_pixel_v124/DigitalPixelV124-Regular.otf",
-        "scale": 0.538
+        "scale": 0.538,
+        "polish_offset": -9,
+        "general_offset": 0
     }
 }
 
@@ -762,7 +770,7 @@ def init_menu_tiles():
     menu_tiles = [
         {
             "id": "quality",
-            "label": "Rozdzielczosc",
+            "label": "Rozdzielczość",
             "value": lambda: camera_settings.get("video_resolution", "1080p30"),
             "icon": "[VIDEO]",
             "section": "Image Quality/Size"
@@ -770,7 +778,7 @@ def init_menu_tiles():
         {
             "id": "grid",
             "label": "Siatka pomocnicza",
-            "value": lambda: "WL." if camera_settings.get("show_grid", False) else "WYL.",
+            "value": lambda: "WŁ." if camera_settings.get("show_grid", False) else "WYŁ.",
             "icon": "[VIDEO]",
             "section": "Image Quality/Size"
         },
@@ -790,7 +798,7 @@ def init_menu_tiles():
         },
         {
             "id": "brightness",
-            "label": "Jasnosc",
+            "label": "Jasność",
             "value": lambda: f"{camera_settings.get('brightness', 0.0):.1f}",
             "icon": "[CONFIG]",
             "section": "Manual Settings"
@@ -811,7 +819,7 @@ def init_menu_tiles():
         },
         {
             "id": "sharpness",
-            "label": "Ostrosc",
+            "label": "Ostrość",
             "value": lambda: f"{camera_settings.get('sharpness', 1.0):.1f}",
             "icon": "[CONFIG]",
             "section": "Manual Settings"
@@ -825,15 +833,15 @@ def init_menu_tiles():
         },
         {
             "id": "show_date",
-            "label": "Pokaz date",
-            "value": lambda: "WL." if camera_settings.get("show_date", False) else "WYL.",
+            "label": "Pokaż date",
+            "value": lambda: "WŁ." if camera_settings.get("show_date", False) else "WYŁ.",
             "icon": "[DATE]",
             "section": "Znacznik Daty"
         },
         {
             "id": "show_time",
-            "label": "Pokaz godzine",
-            "value": lambda: "WL." if camera_settings.get("show_time", False) else "WYL.",
+            "label": "Pokaż godzine",
+            "value": lambda: "WŁ." if camera_settings.get("show_time", False) else "WYŁ.",
             "icon": "[DATE]",
             "section": "Znacznik Daty"
         },
@@ -864,7 +872,7 @@ def init_submenu(tile_id):
         submenu_items = [
             {"type": "header", "text": "[VIDEO] IMAGE QUALITY/SIZE"},
             {"type": "spacer"},
-            {"type": "select", "label": "Rozdzielczosc", "key": "video_resolution", "options": VIDEO_RESOLUTIONS},
+            {"type": "select", "label": "Rozdzielczość", "key": "video_resolution", "options": VIDEO_RESOLUTIONS},
             {"type": "toggle", "label": "Siatka pomocnicza", "key": "show_grid"},
             {"type": "select", "label": "Czcionka", "key": "font_family", "options": FONT_NAMES},
             {"type": "spacer"},
@@ -886,10 +894,10 @@ def init_submenu(tile_id):
             {"type": "header", "text": "[CONFIG] MANUAL SETTINGS"},
             {"type": "spacer"},
             {"type": "select", "label": "White Balance", "key": "awb_mode", "options": WB_MODES},
-            {"type": "slider", "label": "Jasnosc", "key": "brightness", "min": -1.0, "max": 1.0, "step": 0.1},
+            {"type": "slider", "label": "Jasność", "key": "brightness", "min": -1.0, "max": 1.0, "step": 0.1},
             {"type": "slider", "label": "Kontrast", "key": "contrast", "min": 0.0, "max": 2.0, "step": 0.1},
             {"type": "slider", "label": "Saturacja", "key": "saturation", "min": 0.0, "max": 2.0, "step": 0.1},
-            {"type": "slider", "label": "Ostrosc", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
+            {"type": "slider", "label": "Ostrość", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
             {"type": "slider", "label": "Ekspozycja", "key": "exposure_compensation", "min": -2.0, "max": 2.0, "step": 0.2},
             {"type": "spacer"},
             {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
@@ -899,8 +907,8 @@ def init_submenu(tile_id):
         submenu_items = [
             {"type": "header", "text": "[DATE] ZNACZNIK DATY"},
             {"type": "spacer"},
-            {"type": "toggle", "label": "Pokaz date", "key": "show_date"},
-            {"type": "toggle", "label": "Pokaz godzine", "key": "show_time"},
+            {"type": "toggle", "label": "Pokaż date", "key": "show_date"},
+            {"type": "toggle", "label": "Pokaż godzine", "key": "show_time"},
             {"type": "select", "label": "Pozycja daty", "key": "date_position", "options": DATE_POSITIONS},
             {"type": "text", "label": "Reczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
             {"type": "spacer"},
@@ -1331,19 +1339,35 @@ def draw_menu_tiles(frame):
         value_color = YELLOW if is_selected else WHITE
         value_x = list_panel_x + list_panel_width - 25
 
+        # Rysuj value z outline używając offsetów zależnych od czcionki
+        value_text_upper = value_text.upper()
+
+        # Pobierz offsety dla aktualnej czcionki
+        font_family = camera_settings.get("font_family", "HomeVideo")
+        font_config = FONT_DEFINITIONS.get(font_family, FONT_DEFINITIONS["HomeVideo"])
+        general_offset = font_config.get("general_offset", 0)
+        polish_offset = font_config.get("polish_offset", 0)
+
+        # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
+        polish_chars = 'śćźżąęóńŚĆŹŻĄĘÓŃ'
+        has_polish = any(char in value_text_upper for char in polish_chars)
+
+        # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
+        y_offset = general_offset + (polish_offset if has_polish else 0)
+
         # Rysuj czarny outline dla value
         outline_width = 2
         for dx in range(-outline_width, outline_width + 1):
             for dy in range(-outline_width, outline_width + 1):
                 if dx == 0 and dy == 0:
                     continue
-                text_surface_outline = menu_font.render(value_text.upper(), True, BLACK)
-                text_rect_outline = text_surface_outline.get_rect(topright=(value_x + dx, current_y + 20 + dy))
+                text_surface_outline = menu_font.render(value_text_upper, True, BLACK)
+                text_rect_outline = text_surface_outline.get_rect(topright=(value_x + dx, current_y + 20 + y_offset + dy))
                 screen.blit(text_surface_outline, text_rect_outline)
 
         # Rysuj właściwy tekst value
-        text_surface = menu_font.render(value_text.upper(), True, value_color)
-        text_rect = text_surface.get_rect(topright=(value_x, current_y + 20))
+        text_surface = menu_font.render(value_text_upper, True, value_color)
+        text_rect = text_surface.get_rect(topright=(value_x, current_y + 20 + y_offset))
         screen.blit(text_surface, text_rect)
 
 
@@ -1353,7 +1377,7 @@ def draw_menu_tiles(frame):
     # Lewy dolny róg: WYJDZ / MENU
     exit_x = 40
     exit_y = bottom_bar_y + 15
-    draw_text_with_outline("WYJDZ", font_large, WHITE, BLACK, exit_x, exit_y)
+    draw_text_with_outline("WYJDŹ", font_large, WHITE, BLACK, exit_x, exit_y)
 
     menu_button_x = exit_x + 150
     menu_button_width = 140
@@ -1876,15 +1900,30 @@ def refresh_videos():
 
 
 def draw_text(text, font, color, x, y, center=False, bg_color=None, padding=10):
-    """Rysuj tekst"""
+    """Rysuj tekst z offsetami zależnymi od czcionki"""
     if not text or not font:
         return
     try:
         text_surface = font.render(str(text), True, color)
+
+        # Pobierz offsety dla aktualnej czcionki
+        font_family = camera_settings.get("font_family", "HomeVideo")
+        font_config = FONT_DEFINITIONS.get(font_family, FONT_DEFINITIONS["HomeVideo"])
+        general_offset = font_config.get("general_offset", 0)
+        polish_offset = font_config.get("polish_offset", 0)
+
+        # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
+        polish_chars = 'śćźżąęóńŚĆŹŻĄĘÓŃ'
+        has_polish = any(char in str(text) for char in polish_chars)
+
+        # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
+        y_offset = general_offset + (polish_offset if has_polish else 0)
+
         if center:
-            text_rect = text_surface.get_rect(center=(x, y))
+            text_rect = text_surface.get_rect(center=(x, y + y_offset))
         else:
-            text_rect = text_surface.get_rect(topleft=(x, y))
+            text_rect = text_surface.get_rect(topleft=(x, y + y_offset))
+
         if bg_color:
             bg_rect = text_rect.inflate(padding * 2, padding * 2)
             pygame.draw.rect(screen, bg_color, bg_rect, border_radius=5)
@@ -1894,27 +1933,41 @@ def draw_text(text, font, color, x, y, center=False, bg_color=None, padding=10):
 
 
 def draw_text_with_outline(text, font, color, outline_color, x, y, center=False):
-    """Rysuj tekst z obrysem"""
+    """Rysuj tekst z obrysem i offsetami zależnymi od czcionki"""
     if not text or not font:
         return
     try:
         outline_width = 2
+
+        # Pobierz offsety dla aktualnej czcionki
+        font_family = camera_settings.get("font_family", "HomeVideo")
+        font_config = FONT_DEFINITIONS.get(font_family, FONT_DEFINITIONS["HomeVideo"])
+        general_offset = font_config.get("general_offset", 0)
+        polish_offset = font_config.get("polish_offset", 0)
+
+        # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
+        polish_chars = 'śćźżąęóńŚĆŹŻĄĘÓŃ'
+        has_polish = any(char in str(text) for char in polish_chars)
+
+        # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
+        y_offset = general_offset + (polish_offset if has_polish else 0)
+
         for dx in range(-outline_width, outline_width + 1):
             for dy in range(-outline_width, outline_width + 1):
                 if dx == 0 and dy == 0:
                     continue
                 outline_surface = font.render(str(text), True, outline_color)
                 if center:
-                    outline_rect = outline_surface.get_rect(center=(x + dx, y + dy))
+                    outline_rect = outline_surface.get_rect(center=(x + dx, y + y_offset + dy))
                 else:
-                    outline_rect = outline_surface.get_rect(topleft=(x + dx, y + dy))
+                    outline_rect = outline_surface.get_rect(topleft=(x + dx, y + y_offset + dy))
                 screen.blit(outline_surface, outline_rect)
-        
+
         text_surface = font.render(str(text), True, color)
         if center:
-            text_rect = text_surface.get_rect(center=(x, y))
+            text_rect = text_surface.get_rect(center=(x, y + y_offset))
         else:
-            text_rect = text_surface.get_rect(topleft=(x, y))
+            text_rect = text_surface.get_rect(topleft=(x, y + y_offset))
         screen.blit(text_surface, text_rect)
     except:
         pass
@@ -2481,7 +2534,7 @@ def draw_video_context_menu():
     # Opcje menu
     menu_options = [
         {"label": "Zaznacz wiele filmow", "icon": "[SELECT]"},
-        {"label": "Pokaz informacje", "icon": "[INFO]"},
+        {"label": "Pokaż informacje", "icon": "[INFO]"},
     ]
 
     option_height = 80
