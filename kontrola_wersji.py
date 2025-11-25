@@ -174,7 +174,7 @@ FONT_DEFINITIONS = {
     "DigitalPixel2": {
         "path": "/home/pi/fonts/digital_pixel_v124/DigitalPixelV124-Regular.otf",
         "scale": 0.538,
-        "polish_offset": -9,
+        "polish_offset": -14,
         "general_offset": 0
     }
 }
@@ -1202,6 +1202,69 @@ def draw_menu_tiles(frame):
 
     pygame.draw.rect(screen, LIGHT_BLUE, (list_panel_x, list_panel_y, list_panel_width, list_panel_height), 3, border_radius=10)
 
+    # Dekoracyjny trójkąt w dolnej części kwadratu
+    # Punkty trójkąta: lewy dolny róg, prawy dolny róg, górny środek (50px powyżej środka górnej krawędzi)
+    triangle_left = (list_panel_x, list_panel_y + list_panel_height)
+    triangle_right = (list_panel_x + list_panel_width, list_panel_y + list_panel_height)
+    triangle_top = (list_panel_x + list_panel_width // 2, list_panel_y - 50)
+
+    # Ciemniejszy kolor niż kwadrat (40, 50, 60 -> jeszcze ciemniejszy)
+    triangle_base_color = (20, 25, 30)
+
+    # Wysokość trójkąta - obliczamy z punktów
+    triangle_height = triangle_left[1] - triangle_top[1]
+
+    # Ucinamy 2/3 trójkąta (rysujemy tylko dolną 1/3)
+    cut_offset = (triangle_height * 2) // 3
+    visible_height = triangle_height - cut_offset
+
+    # Oblicz wymiary powierzchni dla trójkąta
+    triangle_surface_width = list_panel_width
+    triangle_surface_height = visible_height
+
+    # Utwórz osobną powierzchnię dla trójkąta z alpha
+    triangle_surface = pygame.Surface((triangle_surface_width, triangle_surface_height), pygame.SRCALPHA)
+
+    # Rysujemy trójkąt linia po linii z gradientem alpha
+    for y_offset in range(visible_height):
+        # Oblicz współrzędną Y (od 2/3 wysokości do dołu)
+        current_y = triangle_top[1] + cut_offset + y_offset
+
+        # Jeśli jesteśmy poza obszarem ekranu, przerwij
+        if current_y >= list_panel_y + list_panel_height:
+            break
+
+        # Oblicz szerokość linii na tej wysokości (interpolacja liniowa)
+        # Im niżej, tym szersza linia - obliczamy od początku trójkąta
+        progress_from_top = (cut_offset + y_offset) / triangle_height
+        line_width = int(list_panel_width * progress_from_top)
+
+        # Gradient alpha: od dołu (255) do góry (0)
+        alpha_ratio = y_offset / visible_height
+        alpha = int(255 * alpha_ratio)
+
+        # Oblicz pozycję X względem lewego górnego rogu surface
+        line_x_start = (triangle_surface_width - line_width) // 2
+
+        # Rysuj linię na surface
+        line_color_with_alpha = (*triangle_base_color, alpha)
+        for x in range(line_width):
+            triangle_surface.set_at((line_x_start + x, y_offset), line_color_with_alpha)
+
+    # Zastosuj lekkie rozmycie Gaussowskie
+    # Używamy pygame.transform.smoothscale do symulacji rozmycia
+    blur_size = max(2, triangle_surface_width // 50)  # Dynamiczny rozmiar rozmycia
+    temp_small = pygame.transform.smoothscale(triangle_surface,
+                                              (triangle_surface_width // blur_size,
+                                               triangle_surface_height // blur_size))
+    triangle_surface_blurred = pygame.transform.smoothscale(temp_small,
+                                                            (triangle_surface_width,
+                                                             triangle_surface_height))
+
+    # Narysuj rozmyty trójkąt na ekranie
+    triangle_blit_x = list_panel_x
+    triangle_blit_y = triangle_top[1] + cut_offset
+    screen.blit(triangle_surface_blurred, (triangle_blit_x, triangle_blit_y))
 
     # Sekcje po lewej stronie (pionowo, jedna pod drugą)
     sections = [
