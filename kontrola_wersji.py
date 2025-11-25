@@ -888,6 +888,13 @@ def init_menu_tiles():
             "section": "Znacznik Daty"
         },
         {
+            "id": "manual_date",
+            "label": "Ustaw datę ręcznie",
+            "value": lambda: camera_settings.get("manual_date") if camera_settings.get("manual_date") else "AUTO",
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
             "id": "date_format",
             "label": "Format daty",
             "value": lambda: camera_settings.get("date_format", "DD/MM/YYYY"),
@@ -1413,7 +1420,13 @@ def draw_menu_tiles(frame):
 
     # Dodatkowe przesunięcie w dół, żeby zaznaczenie było widoczne na środku
     visible_items = int((list_panel_height - 20) / item_height)
-    scroll_offset = max(0, selected_tile - visible_items // 2)
+
+    # Scrolluj tylko jeśli elementów jest więcej niż zmieści się w panelu
+    total_items = len(filtered_tiles)
+    if total_items <= visible_items:
+        scroll_offset = 0
+    else:
+        scroll_offset = max(0, selected_tile - visible_items // 2)
 
     for i, tile in enumerate(filtered_tiles):
         actual_idx = i
@@ -3138,6 +3151,11 @@ def handle_ok():
                     camera_settings["date_position"] = DATE_POSITIONS[new_idx]
                     save_config()
                     print(f"[SELECT] Pozycja daty: {camera_settings['date_position']}")
+
+                elif tile_id == "manual_date":
+                    # Otwórz submenu do edycji ręcznej daty
+                    open_submenu("date")
+                    print(f"[SUBMENU] Otwarto menu edycji daty")
 
                 elif tile_id == "date_format":
                     current_idx = DATE_FORMATS.index(camera_settings.get("date_format", "DD/MM/YYYY"))
