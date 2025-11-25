@@ -141,6 +141,10 @@ camera_settings = {
     "show_time": False,
     "date_position": "top_left",
     "manual_date": None,
+    "date_format": "DD/MM/YYYY",
+    "date_month_text": False,
+    "date_separator": "/",
+    "date_color": "yellow",
     "zoom": 0.0,
     "show_grid": True,
     "font_family": "HomeVideo",
@@ -149,6 +153,9 @@ camera_settings = {
 # Opcje
 WB_MODES = ["auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy"]
 DATE_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"]
+DATE_FORMATS = ["DD/MM/YYYY", "MM/DD/YYYY", "YYYY/MM/DD"]
+DATE_SEPARATORS = ["/", " "]
+DATE_COLORS = ["yellow", "white", "red", "green", "blue", "orange"]
 VIDEO_RESOLUTIONS = ["1080p30", "1080p60", "720p30", "720p60", "4K30"]
 
 # Definicje czcionek
@@ -656,26 +663,51 @@ def add_date_overlay_to_video(video_path):
                     date_part = filename_parts[1]
                     time_part = filename_parts[2]
                     date_obj = datetime.strptime(f"{date_part}_{time_part}", "%Y%m%d_%H%M%S")
-                    
-                    if camera_settings.get("show_time", False):
-                        date_text = date_obj.strftime("%Y-%m-%d %H:%M:%S")
+
+                    # Pobierz ustawienia formatu
+                    date_format = camera_settings.get("date_format", "DD/MM/YYYY")
+                    month_text = camera_settings.get("date_month_text", False)
+                    separator = camera_settings.get("date_separator", "/")
+                    show_time = camera_settings.get("show_time", False)
+
+                    # Skróty miesięcy
+                    month_names = ["STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
+                                  "LIP", "SIE", "WRZ", "PAŹ", "LIS", "GRU"]
+
+                    # Pobierz komponenty daty
+                    day = date_obj.strftime("%d")
+                    month = month_names[date_obj.month - 1] if month_text else date_obj.strftime("%m")
+                    year = date_obj.strftime("%Y")
+                    time_str = date_obj.strftime("%H:%M:%S") if show_time else ""
+
+                    # Formatuj datę według wybranego formatu
+                    if date_format == "DD/MM/YYYY":
+                        date_text = f"{day}{separator}{month}{separator}{year}"
+                    elif date_format == "MM/DD/YYYY":
+                        date_text = f"{month}{separator}{day}{separator}{year}"
+                    elif date_format == "YYYY/MM/DD":
+                        date_text = f"{year}{separator}{month}{separator}{day}"
                     else:
-                        date_text = date_obj.strftime("%Y-%m-%d")
+                        date_text = f"{day}{separator}{month}{separator}{year}"
+
+                    # Dodaj czas jeśli włączony
+                    if show_time:
+                        date_text = f"{date_text} {time_str}"
                 else:
                     date_obj = datetime.fromtimestamp(video_path.stat().st_mtime)
                     date_text = date_obj.strftime("%Y-%m-%d")
             except:
                 date_text = datetime.now().strftime("%Y-%m-%d")
-        
+
         print(f"[DATE] Tekst overlay: {date_text}")
-        
+
         # ESCAPOWANIE dla ffmpeg
         date_text_escaped = date_text.replace('\\', '\\\\').replace(':', '\\:').replace("'", "\\'")
-        
+
         # Ustaw pozycję
         position = camera_settings.get("date_position", "top_left")
         margin = 30
-        
+
         if position == "top_left":
             x, y = str(margin), str(margin)
         elif position == "top_right":
@@ -689,15 +721,18 @@ def add_date_overlay_to_video(video_path):
             y = f"h-text_h-{margin}"
         else:
             x, y = str(margin), str(margin)
-        
+
+        # Pobierz kolor z ustawień
+        color_name = camera_settings.get("date_color", "yellow")
+
         temp_file = video_path.parent / f"temp_{video_path.name}"
-        
+
         # Filtr drawtext
         drawtext_filter = (
             f"drawtext="
             f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
             f"text='{date_text_escaped}':"
-            f"fontcolor=yellow:"
+            f"fontcolor={color_name}:"
             f"fontsize=40:"
             f"borderw=3:"
             f"bordercolor=black:"
@@ -853,6 +888,34 @@ def init_menu_tiles():
             "section": "Znacznik Daty"
         },
         {
+            "id": "date_format",
+            "label": "Format daty",
+            "value": lambda: camera_settings.get("date_format", "DD/MM/YYYY"),
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
+            "id": "date_month_text",
+            "label": "Miesiąc słownie",
+            "value": lambda: "WŁ." if camera_settings.get("date_month_text", False) else "WYŁ.",
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
+            "id": "date_separator",
+            "label": "Separator daty",
+            "value": lambda: "SLASH" if camera_settings.get("date_separator", "/") == "/" else "SPACJA",
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
+            "id": "date_color",
+            "label": "Kolor daty",
+            "value": lambda: camera_settings.get("date_color", "yellow").upper(),
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
             "id": "battery_level",
             "label": "Fikcyjny poziom",
             "value": lambda: f"{fake_battery_level}%" if fake_battery_level is not None else "Rzeczywisty",
@@ -910,6 +973,10 @@ def init_submenu(tile_id):
             {"type": "toggle", "label": "Pokaż date", "key": "show_date"},
             {"type": "toggle", "label": "Pokaż godzine", "key": "show_time"},
             {"type": "select", "label": "Pozycja daty", "key": "date_position", "options": DATE_POSITIONS},
+            {"type": "select", "label": "Format daty", "key": "date_format", "options": DATE_FORMATS},
+            {"type": "toggle", "label": "Miesiąc słownie", "key": "date_month_text"},
+            {"type": "select", "label": "Separator daty", "key": "date_separator", "options": DATE_SEPARATORS},
+            {"type": "select", "label": "Kolor daty", "key": "date_color", "options": DATE_COLORS},
             {"type": "text", "label": "Reczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
             {"type": "spacer"},
             {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
@@ -1417,7 +1484,7 @@ def draw_menu_tiles(frame):
         polish_offset = font_config.get("polish_offset", 0)
 
         # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
-        polish_chars = 'śćźżąęóńŚĆŹŻĄĘÓŃ'
+        polish_chars = 'śćźżóńŚĆŹŻÓŃ'
         has_polish = any(char in value_text_upper for char in polish_chars)
 
         # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
@@ -1981,7 +2048,7 @@ def draw_text(text, font, color, x, y, center=False, bg_color=None, padding=10):
         polish_offset = font_config.get("polish_offset", 0)
 
         # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
-        polish_chars = 'śćźżąęóńŚĆŹŻĄĘÓŃ'
+        polish_chars = 'śćźżóńŚĆŹŻÓŃ'
         has_polish = any(char in str(text) for char in polish_chars)
 
         # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
@@ -2014,7 +2081,7 @@ def draw_text_with_outline(text, font, color, outline_color, x, y, center=False)
         polish_offset = font_config.get("polish_offset", 0)
 
         # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
-        polish_chars = 'śćźżąęóńŚĆŹŻĄĘÓŃ'
+        polish_chars = 'śćźżóńŚĆŹŻÓŃ'
         has_polish = any(char in str(text) for char in polish_chars)
 
         # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
@@ -2046,38 +2113,79 @@ def get_display_date():
     if camera_settings.get("manual_date"):
         return camera_settings["manual_date"]
     else:
-        if camera_settings.get("show_time", False):
-            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now()
+        date_format = camera_settings.get("date_format", "DD/MM/YYYY")
+        month_text = camera_settings.get("date_month_text", False)
+        separator = camera_settings.get("date_separator", "/")
+        show_time = camera_settings.get("show_time", False)
+
+        # Skróty miesięcy
+        month_names = ["STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
+                      "LIP", "SIE", "WRZ", "PAŹ", "LIS", "GRU"]
+
+        # Pobierz komponenty daty
+        day = now.strftime("%d")
+        month = month_names[now.month - 1] if month_text else now.strftime("%m")
+        year = now.strftime("%Y")
+        time_str = now.strftime("%H:%M:%S") if show_time else ""
+
+        # Formatuj datę według wybranego formatu z wybranym separatorem
+        if date_format == "DD/MM/YYYY":
+            date_str = f"{day}{separator}{month}{separator}{year}"
+        elif date_format == "MM/DD/YYYY":
+            date_str = f"{month}{separator}{day}{separator}{year}"
+        elif date_format == "YYYY/MM/DD":
+            date_str = f"{year}{separator}{month}{separator}{day}"
         else:
-            return datetime.now().strftime("%Y-%m-%d")
+            date_str = f"{day}{separator}{month}{separator}{year}"
+
+        # Dodaj czas jeśli włączony
+        if show_time:
+            return f"{date_str} {time_str}"
+        else:
+            return date_str
 
 
 def draw_date_overlay():
     """Rysuj overlay daty na podglądzie"""
     if not camera_settings.get("show_date", False):
         return
-    
+
     date_text = get_display_date()
     position = camera_settings.get("date_position", "top_left")
-    
+
+    # Mapowanie nazw kolorów na wartości RGB
+    color_map = {
+        "yellow": YELLOW,
+        "white": WHITE,
+        "red": RED,
+        "green": GREEN,
+        "blue": BLUE,
+        "orange": ORANGE
+    }
+
+    # Pobierz kolor z ustawień
+    color_name = camera_settings.get("date_color", "yellow")
+    date_color = color_map.get(color_name, YELLOW)
+
     margin = 20
-    
+
     if position == "top_left":
         x, y = margin, margin
     elif position == "top_right":
         x, y = SCREEN_WIDTH - margin, margin
-        temp_surface = font_small.render(date_text, True, YELLOW)
+        temp_surface = font_small.render(date_text, True, date_color)
         x -= temp_surface.get_width()
     elif position == "bottom_left":
         x, y = margin, SCREEN_HEIGHT - margin - 30
     elif position == "bottom_right":
         x, y = SCREEN_WIDTH - margin, SCREEN_HEIGHT - margin - 30
-        temp_surface = font_small.render(date_text, True, YELLOW)
+        temp_surface = font_small.render(date_text, True, date_color)
         x -= temp_surface.get_width()
     else:
         x, y = margin, margin
-    
-    draw_text_with_outline(date_text, font_small, YELLOW, BLACK, x, y)
+
+    draw_text_with_outline(date_text, font_small, date_color, BLACK, x, y)
 
 
 def format_time(seconds):
@@ -3030,6 +3138,32 @@ def handle_ok():
                     camera_settings["date_position"] = DATE_POSITIONS[new_idx]
                     save_config()
                     print(f"[SELECT] Pozycja daty: {camera_settings['date_position']}")
+
+                elif tile_id == "date_format":
+                    current_idx = DATE_FORMATS.index(camera_settings.get("date_format", "DD/MM/YYYY"))
+                    new_idx = (current_idx + 1) % len(DATE_FORMATS)
+                    camera_settings["date_format"] = DATE_FORMATS[new_idx]
+                    save_config()
+                    print(f"[SELECT] Format daty: {camera_settings['date_format']}")
+
+                elif tile_id == "date_month_text":
+                    camera_settings["date_month_text"] = not camera_settings.get("date_month_text", False)
+                    save_config()
+                    print(f"[TOGGLE] Miesiąc słownie: {camera_settings['date_month_text']}")
+
+                elif tile_id == "date_separator":
+                    current_idx = DATE_SEPARATORS.index(camera_settings.get("date_separator", "/"))
+                    new_idx = (current_idx + 1) % len(DATE_SEPARATORS)
+                    camera_settings["date_separator"] = DATE_SEPARATORS[new_idx]
+                    save_config()
+                    print(f"[SELECT] Separator daty: {camera_settings['date_separator']}")
+
+                elif tile_id == "date_color":
+                    current_idx = DATE_COLORS.index(camera_settings.get("date_color", "yellow"))
+                    new_idx = (current_idx + 1) % len(DATE_COLORS)
+                    camera_settings["date_color"] = DATE_COLORS[new_idx]
+                    save_config()
+                    print(f"[SELECT] Kolor daty: {camera_settings['date_color']}")
 
                 elif tile_id == "font":
                     current_idx = FONT_NAMES.index(camera_settings.get("font_family", "HomeVideo"))
