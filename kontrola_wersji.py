@@ -65,6 +65,8 @@ STATE_MENU = 4
 STATE_SUBMENU = 5
 STATE_VIDEO_CONTEXT_MENU = 6
 STATE_VIDEO_INFO = 7
+STATE_SELECTION_POPUP = 8
+STATE_DATE_PICKER = 9
 
 # Globalne zmienne
 camera = None
@@ -121,6 +123,17 @@ last_videos_scroll = 0
 menu_editing_mode = False  # True = edytujemy wartości, False = wybieramy sekcję
 selected_section = 0  # Indeks wybranej sekcji (0-3: VIDEO, CONFIG, DATE, BATT)
 
+# Selection Popup
+popup_options = []
+popup_selected = 0
+popup_tile_id = None
+
+# Date Picker
+date_picker_day = 1
+date_picker_month = 1
+date_picker_year = 2025
+date_picker_field = 0  # 0=day, 1=month, 2=year
+
 # SD Card Icons
 sd_icon_surface = None
 no_sd_icon_surface = None
@@ -145,6 +158,7 @@ camera_settings = {
     "date_month_text": False,
     "date_separator": "/",
     "date_color": "yellow",
+    "date_font_size": "medium",
     "zoom": 0.0,
     "show_grid": True,
     "font_family": "HomeVideo",
@@ -156,6 +170,7 @@ DATE_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"]
 DATE_FORMATS = ["DD/MM/YYYY", "MM/DD/YYYY", "YYYY/MM/DD"]
 DATE_SEPARATORS = ["/", " "]
 DATE_COLORS = ["yellow", "white", "red", "green", "blue", "orange"]
+DATE_FONT_SIZES = ["small", "medium", "large", "extra_large"]
 VIDEO_RESOLUTIONS = ["1080p30", "1080p60", "720p30", "720p60", "4K30"]
 
 # Definicje czcionek
@@ -725,6 +740,18 @@ def add_date_overlay_to_video(video_path):
         # Pobierz kolor z ustawień
         color_name = camera_settings.get("date_color", "yellow")
 
+        # Mapowanie rozmiarów czcionek na wartości FFmpeg
+        font_size_map = {
+            "small": 24,
+            "medium": 40,
+            "large": 56,
+            "extra_large": 72
+        }
+
+        # Pobierz rozmiar czcionki z ustawień
+        font_size_name = camera_settings.get("date_font_size", "medium")
+        font_size = font_size_map.get(font_size_name, 40)
+
         temp_file = video_path.parent / f"temp_{video_path.name}"
 
         # Filtr drawtext
@@ -733,7 +760,7 @@ def add_date_overlay_to_video(video_path):
             f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
             f"text='{date_text_escaped}':"
             f"fontcolor={color_name}:"
-            f"fontsize=40:"
+            f"fontsize={font_size}:"
             f"borderw=3:"
             f"bordercolor=black:"
             f"x={x}:"
@@ -919,6 +946,13 @@ def init_menu_tiles():
             "id": "date_color",
             "label": "Kolor daty",
             "value": lambda: camera_settings.get("date_color", "yellow").upper(),
+            "icon": "[DATE]",
+            "section": "Znacznik Daty"
+        },
+        {
+            "id": "date_font_size",
+            "label": "Rozmiar czcionki",
+            "value": lambda: camera_settings.get("date_font_size", "medium").upper(),
             "icon": "[DATE]",
             "section": "Znacznik Daty"
         },
@@ -1185,6 +1219,156 @@ def submenu_ok():
             submenu_editing = False
             submenu_edit_value = ""
             save_config()
+
+
+def open_selection_popup(tile_id, options):
+    """Otwórz małe okienko wyboru z listy opcji"""
+    global current_state, popup_options, popup_selected, popup_tile_id
+
+    popup_tile_id = tile_id
+    popup_options = options
+
+    # Znajdź aktualnie wybraną wartość
+    current_value = camera_settings.get(tile_id.replace("_", "_"), None)
+    if current_value and current_value in options:
+        popup_selected = options.index(current_value)
+    else:
+        popup_selected = 0
+
+    current_state = STATE_SELECTION_POPUP
+    print(f"[POPUP] Otwarto popup wyboru dla: {tile_id}")
+
+
+def open_date_picker():
+    """Otwórz okienko wyboru daty"""
+    global current_state, date_picker_day, date_picker_month, date_picker_year, date_picker_field
+
+    # Inicjalizuj wartościami z manual_date lub aktualna data
+    if camera_settings.get("manual_date"):
+        try:
+            from datetime import datetime
+            date_obj = datetime.strptime(camera_settings["manual_date"], "%Y-%m-%d")
+            date_picker_day = date_obj.day
+            date_picker_month = date_obj.month
+            date_picker_year = date_obj.year
+        except:
+            now = datetime.now()
+            date_picker_day = now.day
+            date_picker_month = now.month
+            date_picker_year = now.year
+    else:
+        from datetime import datetime
+        now = datetime.now()
+        date_picker_day = now.day
+        date_picker_month = now.month
+        date_picker_year = now.year
+
+    date_picker_field = 0  # Zacznij od dnia
+    current_state = STATE_DATE_PICKER
+    print("[DATE_PICKER] Otwarto date picker")
+
+
+def close_popup():
+    """Zamknij popup i wróć do menu"""
+    global current_state, popup_tile_id, popup_options, popup_selected
+
+    current_state = STATE_MENU
+    popup_tile_id = None
+    popup_options = []
+    popup_selected = 0
+    print("[POPUP] Zamknięto popup")
+
+
+def popup_navigate_up():
+    """Nawigacja w górę w popup"""
+    global popup_selected
+    popup_selected = max(0, popup_selected - 1)
+
+
+def popup_navigate_down():
+    """Nawigacja w dół w popup"""
+    global popup_selected
+    popup_selected = min(len(popup_options) - 1, popup_selected + 1)
+
+
+def popup_confirm():
+    """Zatwierdź wybór w popup"""
+    global camera_settings
+
+    if popup_tile_id and 0 <= popup_selected < len(popup_options):
+        selected_value = popup_options[popup_selected]
+        camera_settings[popup_tile_id] = selected_value
+        save_config()
+
+        # Specjalne akcje dla niektórych opcji
+        if popup_tile_id == "font_family":
+            load_fonts()
+        elif popup_tile_id in ["brightness", "contrast", "saturation", "sharpness", "exposure_compensation", "awb_mode"]:
+            apply_camera_settings()
+
+        print(f"[POPUP] Wybrano: {selected_value}")
+        close_popup()
+
+
+def date_picker_navigate_left():
+    """Nawigacja w lewo w date picker - przełącz pole"""
+    global date_picker_field
+    date_picker_field = max(0, date_picker_field - 1)
+
+
+def date_picker_navigate_right():
+    """Nawigacja w prawo w date picker - przełącz pole"""
+    global date_picker_field
+    date_picker_field = min(2, date_picker_field + 1)
+
+
+def date_picker_navigate_up():
+    """Zwiększ wartość aktualnego pola"""
+    global date_picker_day, date_picker_month, date_picker_year
+
+    if date_picker_field == 0:  # Dzień
+        date_picker_day = min(31, date_picker_day + 1)
+    elif date_picker_field == 1:  # Miesiąc
+        date_picker_month = min(12, date_picker_month + 1)
+    elif date_picker_field == 2:  # Rok
+        date_picker_year = min(2099, date_picker_year + 1)
+
+
+def date_picker_navigate_down():
+    """Zmniejsz wartość aktualnego pola"""
+    global date_picker_day, date_picker_month, date_picker_year
+
+    if date_picker_field == 0:  # Dzień
+        date_picker_day = max(1, date_picker_day - 1)
+    elif date_picker_field == 1:  # Miesiąc
+        date_picker_month = max(1, date_picker_month - 1)
+    elif date_picker_field == 2:  # Rok
+        date_picker_year = max(2000, date_picker_year - 1)
+
+
+def date_picker_confirm():
+    """Zatwierdź wybraną datę"""
+    global camera_settings, current_state
+
+    # Walidacja daty
+    max_days = 31
+    if date_picker_month in [4, 6, 9, 11]:
+        max_days = 30
+    elif date_picker_month == 2:
+        # Sprawdź rok przestępny
+        is_leap = (date_picker_year % 4 == 0 and date_picker_year % 100 != 0) or (date_picker_year % 400 == 0)
+        max_days = 29 if is_leap else 28
+
+    # Ogranicz dzień do maksymalnej wartości
+    valid_day = min(date_picker_day, max_days)
+
+    # Zapisz datę w formacie YYYY-MM-DD
+    date_str = f"{date_picker_year:04d}-{date_picker_month:02d}-{valid_day:02d}"
+    camera_settings["manual_date"] = date_str
+    save_config()
+
+    print(f"[DATE_PICKER] Ustawiono datę: {date_str}")
+    current_state = STATE_MENU
 
 
 def draw_menu_tiles(frame):
@@ -1519,33 +1703,64 @@ def draw_menu_tiles(frame):
         screen.blit(text_surface, text_rect)
 
 
+def draw_menu_bottom_buttons():
+    """Rysuj dolne przyciski menu - ZAWSZE NA WIERZCHU (wysoki z-index)"""
     # Dolne przyciski (bez belki w tle)
     bottom_bar_y = SCREEN_HEIGHT - 80
-
-    # Lewy dolny róg: WYJDZ / MENU
     exit_x = 40
     exit_y = bottom_bar_y + 15
-    draw_text_with_outline("WYJDŹ", font_large, WHITE, BLACK, exit_x, exit_y)
 
-    menu_button_x = exit_x + 150
-    menu_button_width = 140
-    menu_button_height = 45
-    pygame.draw.rect(screen, WHITE, (menu_button_x + 10, exit_y - 5, menu_button_width, menu_button_height),
-                     border_radius=10)
-    draw_text("MENU", font_large, BLACK, menu_button_x + 10 + menu_button_width // 2,
-              exit_y + menu_button_height // 2 - 5, center=True)
+    # Sprawdź czy jesteśmy w trybie popup
+    in_popup_mode = (current_state == STATE_SELECTION_POPUP or current_state == STATE_DATE_PICKER)
 
-    # Prawy dolny róg: USTAW / OK
-    ok_button_width = 100
-    ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
-    ok_button_height = 45
-    pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
-                     border_radius=10)
-    draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
-              exit_y + ok_button_height // 2 - 5, center=True)
+    if in_popup_mode:
+        # Tryb popup: COFNIJ / MENU i USTAW / OK (jak w trybie normalnym, ale COFNIJ zamiast WYJDŹ)
+        # Lewy dolny róg: COFNIJ / MENU
+        draw_text_with_outline("COFNIJ", font_large, WHITE, BLACK, exit_x, exit_y)
 
-    set_x = ok_button_x - 150
-    draw_text_with_outline("USTAW", font_large, WHITE, BLACK, set_x, exit_y)
+        menu_button_x = exit_x + 150
+        menu_button_width = 140
+        menu_button_height = 45
+        pygame.draw.rect(screen, WHITE, (menu_button_x + 10, exit_y - 5, menu_button_width, menu_button_height),
+                         border_radius=10)
+        draw_text("MENU", font_large, BLACK, menu_button_x + 10 + menu_button_width // 2,
+                  exit_y + menu_button_height // 2 - 5, center=True)
+
+        # Prawy dolny róg: USTAW / OK
+        ok_button_width = 100
+        ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
+        ok_button_height = 45
+        pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
+                         border_radius=10)
+        draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
+                  exit_y + ok_button_height // 2 - 5, center=True)
+
+        set_x = ok_button_x - 150
+        draw_text_with_outline("USTAW", font_large, WHITE, BLACK, set_x, exit_y)
+    else:
+        # Tryb normalny: WYJDŹ / MENU i USTAW / OK
+        # Lewy dolny róg: WYJDZ / MENU
+        draw_text_with_outline("WYJDŹ", font_large, WHITE, BLACK, exit_x, exit_y)
+
+        menu_button_x = exit_x + 150
+        menu_button_width = 140
+        menu_button_height = 45
+        pygame.draw.rect(screen, WHITE, (menu_button_x + 10, exit_y - 5, menu_button_width, menu_button_height),
+                         border_radius=10)
+        draw_text("MENU", font_large, BLACK, menu_button_x + 10 + menu_button_width // 2,
+                  exit_y + menu_button_height // 2 - 5, center=True)
+
+        # Prawy dolny róg: USTAW / OK
+        ok_button_width = 100
+        ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
+        ok_button_height = 45
+        pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
+                         border_radius=10)
+        draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
+                  exit_y + ok_button_height // 2 - 5, center=True)
+
+        set_x = ok_button_x - 150
+        draw_text_with_outline("USTAW", font_large, WHITE, BLACK, set_x, exit_y)
 
 
 def draw_submenu_screen(frame):
@@ -1726,8 +1941,286 @@ def draw_submenu_screen(frame):
     else:
         instructions = "Up/Down: Nawigacja | OK: Wybierz | MENU: Wróć"
     
-    draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, 
+    draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30,
              center=True, bg_color=BLACK, padding=10)
+
+
+def draw_selection_popup():
+    """Rysuj małe okienko wyboru opcji"""
+    if not popup_options:
+        return
+
+    # Przyciemnienie tła
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 200))
+    screen.blit(overlay, (0, 0))
+
+    # Wymiary popup
+    popup_width = 600
+    item_height = 80
+    header_height = 80
+    popup_height = min(600, len(popup_options) * item_height + 40 + header_height)
+
+    # Pozycja po prawej stronie ekranu
+    popup_margin = 30
+    popup_x = SCREEN_WIDTH - popup_width - popup_margin
+    popup_y = (SCREEN_HEIGHT - popup_height) // 2
+
+    # Tło popup - taki sam kolor jak główny kwadrat
+    dark_blue_gray = (40, 50, 60)
+    pygame.draw.rect(screen, dark_blue_gray, (popup_x, popup_y, popup_width, popup_height))
+
+    # Dodaj liniowy gradient - algorytm jak w głównym kwadracie
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1
+
+    current_y = popup_y + line_spacing
+    line_index = 0
+
+    while current_y < popup_y + popup_height:
+        cyclic_index = line_index % cycle_length
+        brightness_boost = cyclic_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+        line_thickness = initial_line_thickness - cyclic_index
+
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (popup_x + 10, current_y + i),
+                               (popup_x + popup_width - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
+    # Białe obramowanie wokół całego okna
+    pygame.draw.rect(screen, LIGHT_BLUE, (popup_x, popup_y, popup_width, popup_height), 3)
+
+    # Nagłówek na czarnym tle
+    pygame.draw.rect(screen, BLACK, (popup_x, popup_y, popup_width, header_height))
+
+    # Mapowanie klucza ustawienia na nazwę wyświetlaną
+    setting_to_label = {
+        "video_resolution": "Rozdzielczość",
+        "awb_mode": "White Balance",
+        "date_position": "Pozycja daty",
+        "date_format": "Format daty",
+        "date_separator": "Separator daty",
+        "date_color": "Kolor daty",
+        "date_font_size": "Rozmiar czcionki",
+        "font_family": "Czcionka"
+    }
+
+    # Znajdź nazwę opcji na podstawie popup_tile_id
+    header_text = setting_to_label.get(popup_tile_id, "WYBIERZ OPCJĘ").upper()
+
+    draw_text(header_text, menu_font, WHITE, popup_x + popup_width // 2, popup_y + header_height // 2, center=True)
+
+    # Białe obramowanie nagłówka (tylko góra, lewo, prawo - bez dołu)
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x + popup_width, popup_y), 3)  # Góra
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
+    pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
+
+    # Lista opcji
+    list_start_y = popup_y + header_height + 20
+    visible_items = (popup_height - header_height - 40) // item_height
+
+    # Oblicz scroll offset
+    scroll_offset = max(0, popup_selected - visible_items // 2)
+
+    for i in range(len(popup_options)):
+        if i < scroll_offset or i >= scroll_offset + visible_items:
+            continue
+
+        option = popup_options[i]
+        is_selected = (i == popup_selected)
+        item_y = list_start_y + (i - scroll_offset) * item_height
+
+        # Tło zaznaczonego elementu - taki sam gradient jak w głównym menu
+        if is_selected:
+            rect_x = popup_x + 20
+            rect_y = item_y - 5
+            rect_w = popup_width - 40
+            rect_h = item_height - 10
+
+            # Kolory gradientu jak w głównym menu
+            dark_navy = (15, 30, 60)
+            light_blue = (100, 150, 255)
+
+            # Rysuj gradient - górna 1/3 z przejściem
+            gradient_height_grad = rect_h // 3
+            for y_offset in range(rect_h):
+                if y_offset < gradient_height_grad:
+                    # Gradient od jasnego do ciemnego
+                    ratio = y_offset / gradient_height_grad
+                    r = int(light_blue[0] * (1 - ratio) + dark_navy[0] * ratio)
+                    g = int(light_blue[1] * (1 - ratio) + dark_navy[1] * ratio)
+                    b = int(light_blue[2] * (1 - ratio) + dark_navy[2] * ratio)
+                    color = (r, g, b)
+                else:
+                    # Ciemno granatowy dla reszty
+                    color = dark_navy
+
+                pygame.draw.line(screen, color,
+                               (rect_x, rect_y + y_offset),
+                               (rect_x + rect_w, rect_y + y_offset))
+
+            # Białe obramowanie 5px
+            pygame.draw.rect(screen, WHITE, (rect_x, rect_y, rect_w, rect_h), 5)
+            text_color = YELLOW
+        else:
+            text_color = WHITE
+
+        # Tekst opcji - używamy menu_font
+        display_text = str(option).upper()
+        draw_text(display_text, menu_font, text_color, popup_x + popup_width // 2, item_y + item_height // 2 - 10, center=True)
+
+
+def draw_date_picker():
+    """Rysuj okienko wyboru daty z nawigacją lewo/prawo"""
+    # Przyciemnienie tła
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 200))
+    screen.blit(overlay, (0, 0))
+
+    # Wymiary popup
+    popup_width = 800
+    header_height = 80
+    popup_height = 280 + header_height
+
+    # Pozycja po prawej stronie ekranu
+    popup_margin = 30
+    popup_x = SCREEN_WIDTH - popup_width - popup_margin
+    popup_y = (SCREEN_HEIGHT - popup_height) // 2
+
+    # Tło popup - taki sam kolor jak główny kwadrat
+    dark_blue_gray = (40, 50, 60)
+    pygame.draw.rect(screen, dark_blue_gray, (popup_x, popup_y, popup_width, popup_height))
+
+    # Dodaj liniowy gradient - algorytm jak w głównym kwadracie
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1
+
+    current_y = popup_y + line_spacing
+    line_index = 0
+
+    while current_y < popup_y + popup_height:
+        cyclic_index = line_index % cycle_length
+        brightness_boost = cyclic_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+        line_thickness = initial_line_thickness - cyclic_index
+
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (popup_x + 10, current_y + i),
+                               (popup_x + popup_width - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
+    # Białe obramowanie wokół całego okna
+    pygame.draw.rect(screen, LIGHT_BLUE, (popup_x, popup_y, popup_width, popup_height), 3)
+
+    # Nagłówek na czarnym tle
+    pygame.draw.rect(screen, BLACK, (popup_x, popup_y, popup_width, header_height))
+
+    # Znajdź nazwę opcji - dla date picker zawsze "Ustaw datę ręcznie"
+    header_text = "USTAW DATĘ RĘCZNIE"
+
+    draw_text(header_text, menu_font, WHITE, popup_x + popup_width // 2, popup_y + header_height // 2, center=True)
+
+    # Białe obramowanie nagłówka (tylko góra, lewo, prawo - bez dołu)
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x + popup_width, popup_y), 3)  # Góra
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
+    pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
+
+    # Pozycja pól
+    field_y = popup_y + header_height + 50
+    field_width = 150
+    field_height = 100
+    field_spacing = 60
+
+    # Oblicz pozycje X dla trzech pól (dzień, miesiąc, rok)
+    total_fields_width = field_width * 3 + field_spacing * 2
+    start_x = popup_x + (popup_width - total_fields_width) // 2
+
+    fields = [
+        {"value": date_picker_day, "label": "DZIEŃ", "x": start_x},
+        {"value": date_picker_month, "label": "MIESIĄC", "x": start_x + field_width + field_spacing},
+        {"value": date_picker_year, "label": "ROK", "x": start_x + (field_width + field_spacing) * 2}
+    ]
+
+    # Rysuj pola
+    for i, field in enumerate(fields):
+        is_selected = (i == date_picker_field)
+
+        # Tło pola - taki sam gradient jak w głównym menu
+        if is_selected:
+            rect_x = field["x"]
+            rect_y = field_y
+            rect_w = field_width
+            rect_h = field_height
+
+            # Kolory gradientu jak w głównym menu
+            dark_navy = (15, 30, 60)
+            light_blue = (100, 150, 255)
+
+            # Rysuj gradient - górna 1/3 z przejściem
+            gradient_height_grad = rect_h // 3
+            for y_offset in range(rect_h):
+                if y_offset < gradient_height_grad:
+                    # Gradient od jasnego do ciemnego
+                    ratio = y_offset / gradient_height_grad
+                    r = int(light_blue[0] * (1 - ratio) + dark_navy[0] * ratio)
+                    g = int(light_blue[1] * (1 - ratio) + dark_navy[1] * ratio)
+                    b = int(light_blue[2] * (1 - ratio) + dark_navy[2] * ratio)
+                    color = (r, g, b)
+                else:
+                    # Ciemno granatowy dla reszty
+                    color = dark_navy
+
+                pygame.draw.line(screen, color,
+                               (rect_x, rect_y + y_offset),
+                               (rect_x + rect_w, rect_y + y_offset))
+
+            # Białe obramowanie 5px
+            pygame.draw.rect(screen, WHITE, (rect_x, rect_y, rect_w, rect_h), 5)
+            text_color = YELLOW
+            label_color = YELLOW
+        else:
+            pygame.draw.rect(screen, (60, 60, 60), (field["x"], field_y, field_width, field_height))
+            pygame.draw.rect(screen, GRAY, (field["x"], field_y, field_width, field_height), 3)
+            text_color = WHITE
+            label_color = GRAY
+
+        # Label nad polem
+        draw_text(field["label"], font_tiny, label_color, field["x"] + field_width // 2, field_y - 30, center=True)
+
+        # Wartość
+        value_text = f"{field['value']:02d}" if i < 2 else f"{field['value']:04d}"
+        draw_text(value_text, font_large, text_color, field["x"] + field_width // 2, field_y + field_height // 2, center=True)
+
+        # Strzałki dla zaznaczonego pola
+        if is_selected:
+            # Strzałka w górę
+            arrow_up_y = field_y + 15
+            draw_text("▲", font_medium, YELLOW, field["x"] + field_width // 2, arrow_up_y, center=True)
+
+            # Strzałka w dół
+            arrow_down_y = field_y + field_height - 30
+            draw_text("▼", font_medium, YELLOW, field["x"] + field_width // 2, arrow_down_y, center=True)
 
 
 # ============================================================================
@@ -2181,24 +2674,36 @@ def draw_date_overlay():
     color_name = camera_settings.get("date_color", "yellow")
     date_color = color_map.get(color_name, YELLOW)
 
+    # Mapowanie rozmiarów czcionek
+    font_size_map = {
+        "small": font_tiny,
+        "medium": font_small,
+        "large": font_medium,
+        "extra_large": font_large
+    }
+
+    # Pobierz rozmiar czcionki z ustawień
+    font_size_name = camera_settings.get("date_font_size", "medium")
+    date_font = font_size_map.get(font_size_name, font_small)
+
     margin = 20
 
     if position == "top_left":
         x, y = margin, margin
     elif position == "top_right":
         x, y = SCREEN_WIDTH - margin, margin
-        temp_surface = font_small.render(date_text, True, date_color)
+        temp_surface = date_font.render(date_text, True, date_color)
         x -= temp_surface.get_width()
     elif position == "bottom_left":
         x, y = margin, SCREEN_HEIGHT - margin - 30
     elif position == "bottom_right":
         x, y = SCREEN_WIDTH - margin, SCREEN_HEIGHT - margin - 30
-        temp_surface = font_small.render(date_text, True, date_color)
+        temp_surface = date_font.render(date_text, True, date_color)
         x -= temp_surface.get_width()
     else:
         x, y = margin, margin
 
-    draw_text_with_outline(date_text, font_small, date_color, BLACK, x, y)
+    draw_text_with_outline(date_text, date_font, date_color, BLACK, x, y)
 
 
 def format_time(seconds):
@@ -3021,6 +3526,11 @@ def handle_menu():
         close_menu()
     elif current_state == STATE_SUBMENU:
         close_submenu()
+    elif current_state == STATE_SELECTION_POPUP:
+        close_popup()
+    elif current_state == STATE_DATE_PICKER:
+        current_state = STATE_MENU
+        print("[DATE_PICKER] Anulowano")
     elif current_state == STATE_VIDEOS:
         if multi_select_mode:
             # Anuluj tryb multi-select i wyczyść zaznaczenia
@@ -3102,6 +3612,12 @@ def handle_ok():
         # Zamknij dialog informacji
         current_state = STATE_VIDEOS
 
+    elif current_state == STATE_SELECTION_POPUP:
+        popup_confirm()
+
+    elif current_state == STATE_DATE_PICKER:
+        date_picker_confirm()
+
     elif current_state == STATE_MENU:
         if not menu_editing_mode:
             # Jeśli nie jesteśmy w trybie edycji, OK wchodzi do trybu edycji (tak jak prawo)
@@ -3129,40 +3645,22 @@ def handle_ok():
                     apply_camera_settings()
                     print(f"[TOGGLE] {tile['label']}: {camera_settings[key]}")
 
-                # Cykliczne przełączanie dla select
+                # Otwórz popup dla opcji z listą
                 elif tile_id == "quality":
-                    current_idx = VIDEO_RESOLUTIONS.index(camera_settings.get("video_resolution", "1080p30"))
-                    new_idx = (current_idx + 1) % len(VIDEO_RESOLUTIONS)
-                    camera_settings["video_resolution"] = VIDEO_RESOLUTIONS[new_idx]
-                    save_config()
-                    print(f"[SELECT] Rozdzielczość: {camera_settings['video_resolution']}")
+                    open_selection_popup("video_resolution", VIDEO_RESOLUTIONS)
 
                 elif tile_id == "wb":
-                    current_idx = WB_MODES.index(camera_settings.get("awb_mode", "auto"))
-                    new_idx = (current_idx + 1) % len(WB_MODES)
-                    camera_settings["awb_mode"] = WB_MODES[new_idx]
-                    save_config()
-                    apply_camera_settings()
-                    print(f"[SELECT] White Balance: {camera_settings['awb_mode']}")
+                    open_selection_popup("awb_mode", WB_MODES)
 
                 elif tile_id == "date_position":
-                    current_idx = DATE_POSITIONS.index(camera_settings.get("date_position", "top_left"))
-                    new_idx = (current_idx + 1) % len(DATE_POSITIONS)
-                    camera_settings["date_position"] = DATE_POSITIONS[new_idx]
-                    save_config()
-                    print(f"[SELECT] Pozycja daty: {camera_settings['date_position']}")
+                    open_selection_popup("date_position", DATE_POSITIONS)
 
                 elif tile_id == "manual_date":
-                    # Otwórz submenu do edycji ręcznej daty
-                    open_submenu("date")
-                    print(f"[SUBMENU] Otwarto menu edycji daty")
+                    # Otwórz date picker
+                    open_date_picker()
 
                 elif tile_id == "date_format":
-                    current_idx = DATE_FORMATS.index(camera_settings.get("date_format", "DD/MM/YYYY"))
-                    new_idx = (current_idx + 1) % len(DATE_FORMATS)
-                    camera_settings["date_format"] = DATE_FORMATS[new_idx]
-                    save_config()
-                    print(f"[SELECT] Format daty: {camera_settings['date_format']}")
+                    open_selection_popup("date_format", DATE_FORMATS)
 
                 elif tile_id == "date_month_text":
                     camera_settings["date_month_text"] = not camera_settings.get("date_month_text", False)
@@ -3170,26 +3668,16 @@ def handle_ok():
                     print(f"[TOGGLE] Miesiąc słownie: {camera_settings['date_month_text']}")
 
                 elif tile_id == "date_separator":
-                    current_idx = DATE_SEPARATORS.index(camera_settings.get("date_separator", "/"))
-                    new_idx = (current_idx + 1) % len(DATE_SEPARATORS)
-                    camera_settings["date_separator"] = DATE_SEPARATORS[new_idx]
-                    save_config()
-                    print(f"[SELECT] Separator daty: {camera_settings['date_separator']}")
+                    open_selection_popup("date_separator", DATE_SEPARATORS)
 
                 elif tile_id == "date_color":
-                    current_idx = DATE_COLORS.index(camera_settings.get("date_color", "yellow"))
-                    new_idx = (current_idx + 1) % len(DATE_COLORS)
-                    camera_settings["date_color"] = DATE_COLORS[new_idx]
-                    save_config()
-                    print(f"[SELECT] Kolor daty: {camera_settings['date_color']}")
+                    open_selection_popup("date_color", DATE_COLORS)
+
+                elif tile_id == "date_font_size":
+                    open_selection_popup("date_font_size", DATE_FONT_SIZES)
 
                 elif tile_id == "font":
-                    current_idx = FONT_NAMES.index(camera_settings.get("font_family", "HomeVideo"))
-                    new_idx = (current_idx + 1) % len(FONT_NAMES)
-                    camera_settings["font_family"] = FONT_NAMES[new_idx]
-                    save_config()
-                    load_fonts()  # Przeładuj czcionki
-                    print(f"[SELECT] Czcionka: {camera_settings['font_family']}")
+                    open_selection_popup("font_family", FONT_NAMES)
 
                 # Dla sliderów otwórz submenu do precyzyjnej edycji
                 elif tile_id in ["brightness", "contrast", "saturation", "sharpness", "exposure", "battery_level"]:
@@ -3228,6 +3716,10 @@ def handle_up():
         submenu_navigate_up()
     elif current_state == STATE_VIDEO_CONTEXT_MENU:
         video_context_menu_selection = max(0, video_context_menu_selection - 1)
+    elif current_state == STATE_SELECTION_POPUP:
+        popup_navigate_up()
+    elif current_state == STATE_DATE_PICKER:
+        date_picker_navigate_up()
 
 
 def handle_down():
@@ -3242,6 +3734,10 @@ def handle_down():
         submenu_navigate_down()
     elif current_state == STATE_VIDEO_CONTEXT_MENU:
         video_context_menu_selection = min(1, video_context_menu_selection + 1)
+    elif current_state == STATE_SELECTION_POPUP:
+        popup_navigate_down()
+    elif current_state == STATE_DATE_PICKER:
+        date_picker_navigate_down()
 
 
 def handle_left():
@@ -3252,6 +3748,8 @@ def handle_left():
         menu_navigate_left()
     elif current_state == STATE_VIDEOS:
         videos_navigate_left()
+    elif current_state == STATE_DATE_PICKER:
+        date_picker_navigate_left()
 
 
 def handle_right():
@@ -3262,6 +3760,8 @@ def handle_right():
         menu_navigate_right()
     elif current_state == STATE_VIDEOS:
         videos_navigate_right()
+    elif current_state == STATE_DATE_PICKER:
+        date_picker_navigate_right()
 
 
 def handle_zoom_in():
@@ -3505,15 +4005,24 @@ if __name__ == '__main__':
                 draw_playing_screen()
             elif current_state == STATE_MENU:
                 draw_menu_tiles(frame)
+                draw_menu_bottom_buttons()  # Przyciski na wierzchu (wysoki z-index)
             elif current_state == STATE_SUBMENU:
                 draw_submenu_screen(frame)
+            elif current_state == STATE_SELECTION_POPUP:
+                draw_menu_tiles(frame)
+                draw_selection_popup()
+                draw_menu_bottom_buttons()  # Przyciski na wierzchu (wysoki z-index)
+            elif current_state == STATE_DATE_PICKER:
+                draw_menu_tiles(frame)
+                draw_date_picker()
+                draw_menu_bottom_buttons()  # Przyciski na wierzchu (wysoki z-index)
             elif current_state == STATE_VIDEO_CONTEXT_MENU:
                 draw_videos_screen()
                 draw_video_context_menu()
             elif current_state == STATE_VIDEO_INFO:
                 draw_videos_screen()
                 draw_video_info_dialog()
-            
+
             pygame.display.flip()
             clock.tick(30)
     
