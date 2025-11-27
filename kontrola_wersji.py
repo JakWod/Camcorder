@@ -1959,12 +1959,12 @@ def draw_selection_popup():
     popup_width = 600
     item_height = 80
     header_height = 80
-    popup_height = min(600, len(popup_options) * item_height + 40 + header_height)
+    popup_height = min(600, len(popup_options) * item_height + 40 + header_height) + 70  # +50 pikseli
 
     # Pozycja po prawej stronie ekranu
     popup_margin = 30
     popup_x = SCREEN_WIDTH - popup_width - popup_margin
-    popup_y = (SCREEN_HEIGHT - popup_height) // 2
+    popup_y = (SCREEN_HEIGHT - popup_height) // 2 - 35  # -50 aby przesunąć o 50px w górę (nie w dół)
 
     # Tło popup - taki sam kolor jak główny kwadrat
     dark_blue_gray = (40, 50, 60)
@@ -2019,16 +2019,19 @@ def draw_selection_popup():
     # Znajdź nazwę opcji na podstawie popup_tile_id
     header_text = setting_to_label.get(popup_tile_id, "WYBIERZ OPCJĘ").upper()
 
-    draw_text(header_text, menu_font, WHITE, popup_x + popup_width // 2, popup_y + header_height // 2, center=True)
+    draw_text(header_text, menu_font, WHITE, popup_x + popup_width // 2, (popup_y + header_height // 2) + 10, center=True)
 
     # Białe obramowanie nagłówka (tylko góra, lewo, prawo - bez dołu)
     pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x + popup_width, popup_y), 3)  # Góra
     pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
     pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
 
-    # Lista opcji
-    list_start_y = popup_y + header_height + 20
-    visible_items = (popup_height - header_height - 40) // item_height
+    # Lista opcji - wyśrodkowana (równa odległość od góry i dołu)
+    total_items_height = len(popup_options) * item_height
+    available_space = popup_height - header_height
+    vertical_padding = (available_space - total_items_height) // 2
+    list_start_y = popup_y + header_height + vertical_padding
+    visible_items = (popup_height - header_height - 2 * vertical_padding) // item_height
 
     # Oblicz scroll offset
     scroll_offset = max(0, popup_selected - visible_items // 2)
