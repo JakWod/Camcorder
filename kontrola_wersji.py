@@ -1959,7 +1959,7 @@ def draw_selection_popup():
     popup_width = 600
     item_height = 80
     header_height = 80
-    popup_height = min(600, len(popup_options) * item_height + 40 + header_height) + 70  # +50 pikseli
+    popup_height = min(600, len(popup_options) * item_height + 40 + header_height + 70) # +50 pikseli
 
     # Pozycja po prawej stronie ekranu
     popup_margin = 30
@@ -2026,15 +2026,44 @@ def draw_selection_popup():
     pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
     pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
 
-    # Lista opcji - wyśrodkowana (równa odległość od góry i dołu)
-    total_items_height = len(popup_options) * item_height
+    # Lista opcji - najpierw oblicz ile opcji się zmieści
+    total_items = len(popup_options)
     available_space = popup_height - header_height
-    vertical_padding = (available_space - total_items_height) // 2
-    list_start_y = popup_y + header_height + vertical_padding
-    visible_items = (popup_height - header_height - 2 * vertical_padding) // item_height
+    fixed_padding = 20  # Stały padding gdy jest scrollowanie
 
-    # Oblicz scroll offset
-    scroll_offset = max(0, popup_selected - visible_items // 2)
+    # Oblicz maksymalną liczbę widocznych elementów (z paddingiem)
+    max_visible_items = (available_space - 2 * fixed_padding) // item_height
+
+    # Sprawdź czy potrzebne scrollowanie
+    needs_scrolling = total_items > max_visible_items
+
+    if needs_scrolling:
+        # Scrollowanie potrzebne - użyj stałego paddingu
+        vertical_padding = fixed_padding
+        visible_items = max_visible_items
+    else:
+        # Wszystkie opcje się mieszczą - wyśrodkuj (równa odległość od góry i dołu)
+        total_items_height = total_items * item_height
+        vertical_padding = (available_space - total_items_height) // 2
+        visible_items = total_items
+
+    list_start_y = popup_y + header_height + vertical_padding
+
+    if needs_scrolling:
+        # Scrollowanie potrzebne
+        scroll_offset = max(0, min(popup_selected - visible_items // 2, total_items - visible_items))
+    else:
+        # Wszystkie opcje mieszczą się - brak scrollowania
+        scroll_offset = 0
+
+    # Ustaw clipping na obszar listy (żeby opcje nie nachodzily na nagłówek)
+    list_clip_rect = pygame.Rect(
+        popup_x,
+        popup_y + header_height,
+        popup_width,
+        popup_height - header_height
+    )
+    screen.set_clip(list_clip_rect)
 
     for i in range(len(popup_options)):
         if i < scroll_offset or i >= scroll_offset + visible_items:
@@ -2082,6 +2111,38 @@ def draw_selection_popup():
         # Tekst opcji - używamy menu_font
         display_text = str(option).upper()
         draw_text(display_text, menu_font, text_color, popup_x + popup_width // 2, item_y + item_height // 2 - 10, center=True)
+
+    # Wyłącz clipping przed rysowaniem wskaźników
+    screen.set_clip(None)
+
+    # Wskaźnik scrollowania - pokaż gdy są więcej opcji poniżej
+    if needs_scrolling:
+        has_more_below = (scroll_offset + visible_items) < total_items
+        has_more_above = scroll_offset > 0
+
+        # Strzałka w dół - gdy są więcej opcji poniżej
+        if has_more_below:
+            arrow_y = popup_y + popup_height - 30
+            arrow_x = popup_x + popup_width // 2
+            # Rysuj trójkąt skierowany w dół
+            arrow_size = 15
+            pygame.draw.polygon(screen, YELLOW, [
+                (arrow_x, arrow_y + arrow_size),  # Dolny wierzchołek
+                (arrow_x - arrow_size, arrow_y),   # Lewy górny wierzchołek
+                (arrow_x + arrow_size, arrow_y)    # Prawy górny wierzchołek
+            ])
+
+        # Strzałka w górę - gdy są więcej opcji powyżej
+        if has_more_above:
+            arrow_y = popup_y + header_height + 15
+            arrow_x = popup_x + popup_width // 2
+            # Rysuj trójkąt skierowany w górę
+            arrow_size = 15
+            pygame.draw.polygon(screen, YELLOW, [
+                (arrow_x, arrow_y - arrow_size),  # Górny wierzchołek
+                (arrow_x - arrow_size, arrow_y),   # Lewy dolny wierzchołek
+                (arrow_x + arrow_size, arrow_y)    # Prawy dolny wierzchołek
+            ])
 
 
 def draw_date_picker():
