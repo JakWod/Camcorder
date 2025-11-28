@@ -122,17 +122,21 @@ last_menu_scroll = 0
 last_videos_scroll = 0
 menu_editing_mode = False  # True = edytujemy wartości, False = wybieramy sekcję
 selected_section = 0  # Indeks wybranej sekcji (0-3: VIDEO, CONFIG, DATE, BATT)
+menu_value_editing = False  # True = edytujemy konkretną wartość liczbową strzałkami lewo/prawo
+
+# Date editing in menu
+date_editing = False  # True = edytujemy datę bezpośrednio w menu
+date_edit_day = 1
+date_edit_month = 1
+date_edit_year = 2025
+date_edit_segment = 0  # 0=day, 1=month, 2=year
+date_blink_state = True  # Stan migania dla segmentu
+date_last_blink_time = 0
 
 # Selection Popup
 popup_options = []
 popup_selected = 0
 popup_tile_id = None
-
-# Date Picker
-date_picker_day = 1
-date_picker_month = 1
-date_picker_year = 2025
-date_picker_field = 0  # 0=day, 1=month, 2=year
 
 # SD Card Icons
 sd_icon_surface = None
@@ -168,7 +172,7 @@ camera_settings = {
 WB_MODES = ["auto", "incandescent", "tungsten", "fluorescent", "indoor", "daylight", "cloudy"]
 DATE_POSITIONS = ["top_left", "top_right", "bottom_left", "bottom_right"]
 DATE_FORMATS = ["DD/MM/YYYY", "MM/DD/YYYY", "YYYY/MM/DD"]
-DATE_SEPARATORS = ["/", " "]
+DATE_SEPARATORS = ["/", " ", "-"]
 DATE_COLORS = ["yellow", "white", "red", "green", "blue", "orange"]
 DATE_FONT_SIZES = ["small", "medium", "large", "extra_large"]
 VIDEO_RESOLUTIONS = ["1080p30", "1080p60", "720p30", "720p60", "4K30"]
@@ -428,6 +432,40 @@ def get_recording_quality():
     """Pobierz aktualną jakość nagrywania"""
     resolution = camera_settings.get("video_resolution", "1080p30")
     return resolution.replace("p", "p ")
+
+
+def format_manual_date(date_str):
+    """Formatuje datę ręczną zgodnie z ustawieniami użytkownika (separator, format i miesiąc słownie)"""
+    if not date_str:
+        return "AUTO"
+
+    # date_str jest w formacie YYYY-MM-DD
+    year = date_str[0:4]
+    month_num = date_str[5:7]
+    day = date_str[8:10]
+
+    # Pobierz separator, format i opcję miesiąca słownie
+    separator = camera_settings.get("date_separator", "/")
+    date_format = camera_settings.get("date_format", "DD/MM/YYYY")
+    month_text = camera_settings.get("date_month_text", False)
+
+    # Skróty miesięcy
+    month_names = ["STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
+                  "LIP", "SIE", "WRZ", "PAŹ", "LIS", "GRU"]
+
+    # Użyj miesiąca słownie jeśli włączone
+    if month_text:
+        month = month_names[int(month_num) - 1]
+    else:
+        month = month_num
+
+    # Buduj datę zgodnie z formatem
+    if date_format == "DD/MM/YYYY":
+        return f"{day}{separator}{month}{separator}{year}"
+    elif date_format == "MM/DD/YYYY":
+        return f"{month}{separator}{day}{separator}{year}"
+    else:  # YYYY/MM/DD
+        return f"{year}{separator}{month}{separator}{day}"
 
 
 def draw_sd_card_info():
@@ -917,7 +955,7 @@ def init_menu_tiles():
         {
             "id": "manual_date",
             "label": "Ustaw datę ręcznie",
-            "value": lambda: camera_settings.get("manual_date") if camera_settings.get("manual_date") else "AUTO",
+            "value": lambda: format_manual_date(camera_settings.get("manual_date")),
             "icon": "[DATE]",
             "section": "Znacznik Daty"
         },
@@ -938,7 +976,7 @@ def init_menu_tiles():
         {
             "id": "date_separator",
             "label": "Separator daty",
-            "value": lambda: "SLASH" if camera_settings.get("date_separator", "/") == "/" else "SPACJA",
+            "value": lambda: "SLASH" if camera_settings.get("date_separator", "/") == "/" else ("SPACJA" if camera_settings.get("date_separator", "/") == " " else "KRESKA"),
             "icon": "[DATE]",
             "section": "Znacznik Daty"
         },
@@ -1035,12 +1073,13 @@ def init_submenu(tile_id):
 
 def open_menu():
     """Otwórz menu główne"""
-    global current_state, selected_tile, menu_editing_mode, selected_section
+    global current_state, selected_tile, menu_editing_mode, selected_section, menu_value_editing
 
     init_menu_tiles()
     selected_tile = 0
     selected_section = 0
     menu_editing_mode = False
+    menu_value_editing = False
     current_state = STATE_MENU
     print("\n[MENU] MENU OTWARTE")
 
@@ -1058,11 +1097,12 @@ def open_submenu(tile_id):
 
 def close_menu():
     """Zamknij menu"""
-    global current_state, submenu_editing
-    
+    global current_state, submenu_editing, menu_value_editing
+
     save_config()
     apply_camera_settings()
     submenu_editing = False
+    menu_value_editing = False
     current_state = STATE_MAIN
     print("\n[MAIN] Ekran główny")
 
@@ -1097,9 +1137,43 @@ def menu_navigate_right():
 
 def menu_navigate_down():
     """Nawigacja w dół - wybór sekcji lub przewijanie opcji"""
-    global selected_section, selected_tile
+    global selected_section, selected_tile, date_edit_day, date_edit_month, date_edit_year
     if current_state == STATE_MENU:
-        if menu_editing_mode:
+        if date_editing:
+            # W trybie edycji daty: zmniejsz wartość aktualnego segmentu
+            # Mapowanie segmentu na pole zależy od formatu daty
+            date_format = camera_settings.get("date_format", "DD/MM/YYYY")
+
+            if date_format == "DD/MM/YYYY":
+                # Segmenty: 0=dzień, 1=miesiąc, 2=rok
+                if date_edit_segment == 0:
+                    date_edit_day = max(1, date_edit_day - 1)
+                elif date_edit_segment == 1:
+                    date_edit_month = max(1, date_edit_month - 1)
+                elif date_edit_segment == 2:
+                    date_edit_year = max(2000, date_edit_year - 1)
+            elif date_format == "MM/DD/YYYY":
+                # Segmenty: 0=miesiąc, 1=dzień, 2=rok
+                if date_edit_segment == 0:
+                    date_edit_month = max(1, date_edit_month - 1)
+                elif date_edit_segment == 1:
+                    date_edit_day = max(1, date_edit_day - 1)
+                elif date_edit_segment == 2:
+                    date_edit_year = max(2000, date_edit_year - 1)
+            else:  # YYYY/MM/DD
+                # Segmenty: 0=rok, 1=miesiąc, 2=dzień
+                if date_edit_segment == 0:
+                    date_edit_year = max(2000, date_edit_year - 1)
+                elif date_edit_segment == 1:
+                    date_edit_month = max(1, date_edit_month - 1)
+                elif date_edit_segment == 2:
+                    date_edit_day = max(1, date_edit_day - 1)
+
+            print(f"[DATE] {date_edit_day:02d}-{date_edit_month:02d}-{date_edit_year:04d}")
+        elif menu_value_editing:
+            # W trybie edycji wartości: zablokuj nawigację
+            return
+        elif menu_editing_mode:
             # W trybie edycji: przewijaj opcje w dół
             section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
             current_section_name = section_names[selected_section]
@@ -1112,9 +1186,43 @@ def menu_navigate_down():
 
 def menu_navigate_up():
     """Nawigacja w górę - wybór sekcji lub przewijanie opcji"""
-    global selected_section, selected_tile
+    global selected_section, selected_tile, date_edit_day, date_edit_month, date_edit_year
     if current_state == STATE_MENU:
-        if menu_editing_mode:
+        if date_editing:
+            # W trybie edycji daty: zwiększ wartość aktualnego segmentu
+            # Mapowanie segmentu na pole zależy od formatu daty
+            date_format = camera_settings.get("date_format", "DD/MM/YYYY")
+
+            if date_format == "DD/MM/YYYY":
+                # Segmenty: 0=dzień, 1=miesiąc, 2=rok
+                if date_edit_segment == 0:
+                    date_edit_day = min(31, date_edit_day + 1)
+                elif date_edit_segment == 1:
+                    date_edit_month = min(12, date_edit_month + 1)
+                elif date_edit_segment == 2:
+                    date_edit_year = min(2099, date_edit_year + 1)
+            elif date_format == "MM/DD/YYYY":
+                # Segmenty: 0=miesiąc, 1=dzień, 2=rok
+                if date_edit_segment == 0:
+                    date_edit_month = min(12, date_edit_month + 1)
+                elif date_edit_segment == 1:
+                    date_edit_day = min(31, date_edit_day + 1)
+                elif date_edit_segment == 2:
+                    date_edit_year = min(2099, date_edit_year + 1)
+            else:  # YYYY/MM/DD
+                # Segmenty: 0=rok, 1=miesiąc, 2=dzień
+                if date_edit_segment == 0:
+                    date_edit_year = min(2099, date_edit_year + 1)
+                elif date_edit_segment == 1:
+                    date_edit_month = min(12, date_edit_month + 1)
+                elif date_edit_segment == 2:
+                    date_edit_day = min(31, date_edit_day + 1)
+
+            print(f"[DATE] {date_edit_day:02d}-{date_edit_month:02d}-{date_edit_year:04d}")
+        elif menu_value_editing:
+            # W trybie edycji wartości: zablokuj nawigację
+            return
+        elif menu_editing_mode:
             # W trybie edycji: przewijaj opcje w górę
             selected_tile = max(0, selected_tile - 1)
         else:
@@ -1653,8 +1761,9 @@ def draw_menu_tiles(frame):
                                (rect_x, rect_y + 8 + y_offset),
                                (rect_x + rect_w, rect_y + 8 + y_offset))
 
-            # Białe obramowanie - wydłużone o 2 piksele w dół
-            pygame.draw.rect(screen, WHITE,
+            # Obramowanie - pomarańczowe gdy edytujemy wartość, białe normalnie
+            border_color = ORANGE if menu_value_editing else WHITE
+            pygame.draw.rect(screen, border_color,
                              (rect_x, rect_y + 8, rect_w, rect_h + 6), 5,
                              border_radius=8)
 
@@ -1671,36 +1780,116 @@ def draw_menu_tiles(frame):
         value_color = YELLOW if is_selected else WHITE
         value_x = list_panel_x + list_panel_width - 25
 
-        # Rysuj value z outline używając offsetów zależnych od czcionki
-        value_text_upper = value_text.upper()
-
         # Pobierz offsety dla aktualnej czcionki
         font_family = camera_settings.get("font_family", "HomeVideo")
         font_config = FONT_DEFINITIONS.get(font_family, FONT_DEFINITIONS["HomeVideo"])
         general_offset = font_config.get("general_offset", 0)
         polish_offset = font_config.get("polish_offset", 0)
 
-        # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
-        polish_chars = 'śćźżóńŚĆŹŻÓŃ'
-        has_polish = any(char in value_text_upper for char in polish_chars)
+        # Specjalne rysowanie dla daty w trybie edycji
+        if tile["id"] == "manual_date" and date_editing:
+            # Pobierz ustawienia formatu, separatora i miesiąca słownie
+            separator = camera_settings.get("date_separator", "/")
+            date_format = camera_settings.get("date_format", "DD/MM/YYYY")
+            month_text = camera_settings.get("date_month_text", False)
 
-        # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
-        y_offset = general_offset + (polish_offset if has_polish else 0)
+            # Skróty miesięcy
+            month_names = ["STY", "LUT", "MAR", "KWI", "MAJ", "CZE",
+                          "LIP", "SIE", "WRZ", "PAŹ", "LIS", "GRU"]
 
-        # Rysuj czarny outline dla value
-        outline_width = 2
-        for dx in range(-outline_width, outline_width + 1):
-            for dy in range(-outline_width, outline_width + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                text_surface_outline = menu_font.render(value_text_upper, True, BLACK)
-                text_rect_outline = text_surface_outline.get_rect(topright=(value_x + dx, current_y + 20 + y_offset + dy))
-                screen.blit(text_surface_outline, text_rect_outline)
+            # Format zgodny z ustawieniami użytkownika z migającym segmentem
+            day_str = f"{date_edit_day:02d}"
+            # Użyj miesiąca słownie jeśli włączone
+            if month_text:
+                month_str = month_names[date_edit_month - 1]
+                month_placeholder = "   "  # 3 spacje dla STY, LUT, etc.
+            else:
+                month_str = f"{date_edit_month:02d}"
+                month_placeholder = "  "  # 2 spacje dla numerów
+            year_str = f"{date_edit_year:04d}"
 
-        # Rysuj właściwy tekst value
-        text_surface = menu_font.render(value_text_upper, True, value_color)
-        text_rect = text_surface.get_rect(topright=(value_x, current_y + 20 + y_offset))
-        screen.blit(text_surface, text_rect)
+            # Pobierz aktualny czas dla migania
+            global date_last_blink_time, date_blink_state
+            current_time = pygame.time.get_ticks()
+            if current_time - date_last_blink_time > 500:  # Migaj co 500ms
+                date_blink_state = not date_blink_state
+                date_last_blink_time = current_time
+
+            # Określ który segment jest edytowany i migający w zależności od formatu
+            # date_edit_segment: 0=pierwszy, 1=środkowy, 2=ostatni
+            if date_format == "DD/MM/YYYY":
+                # Segmenty: 0=day, 1=month, 2=year
+                segment_values = [day_str, month_str, year_str]
+                empty_placeholders = ["  ", month_placeholder, "    "]
+            elif date_format == "MM/DD/YYYY":
+                # Segmenty: 0=month, 1=day, 2=year
+                segment_values = [month_str, day_str, year_str]
+                empty_placeholders = [month_placeholder, "  ", "    "]
+            else:  # YYYY/MM/DD
+                # Segmenty: 0=year, 1=month, 2=day
+                segment_values = [year_str, month_str, day_str]
+                empty_placeholders = ["    ", month_placeholder, "  "]
+
+            # Buduj tekst daty z uwzględnieniem migania
+            date_parts = []
+            for i, (value, placeholder) in enumerate(zip(segment_values, empty_placeholders)):
+                if i == date_edit_segment:
+                    # Ten segment miga
+                    date_parts.append(value if date_blink_state else placeholder)
+                else:
+                    # Ten segment jest widoczny zawsze
+                    date_parts.append(value)
+
+                # Dodaj separator po pierwszym i drugim segmencie
+                if i < 2:
+                    date_parts.append(separator)
+
+            value_text_upper = "".join(date_parts)
+
+            # Oblicz offset
+            polish_chars = 'śćźżóńŚĆŹŻÓŃ'
+            has_polish = any(char in value_text_upper for char in polish_chars)
+            y_offset = general_offset + (polish_offset if has_polish else 0)
+
+            # Rysuj outline
+            outline_width = 2
+            for dx in range(-outline_width, outline_width + 1):
+                for dy in range(-outline_width, outline_width + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    text_surface_outline = menu_font.render(value_text_upper, True, BLACK)
+                    text_rect_outline = text_surface_outline.get_rect(topright=(value_x + dx, current_y + 20 + y_offset + dy))
+                    screen.blit(text_surface_outline, text_rect_outline)
+
+            # Rysuj tekst daty
+            text_surface = menu_font.render(value_text_upper, True, value_color)
+            text_rect = text_surface.get_rect(topright=(value_x, current_y + 20 + y_offset))
+            screen.blit(text_surface, text_rect)
+        else:
+            # Standardowe rysowanie dla innych wartości
+            value_text_upper = value_text.upper()
+
+            # Sprawdź czy tekst zawiera polskie znaki diakrytyczne
+            polish_chars = 'śćźżóńŚĆŹŻÓŃ'
+            has_polish = any(char in value_text_upper for char in polish_chars)
+
+            # Oblicz całkowity offset: ogólny offset + offset dla polskich znaków (jeśli są)
+            y_offset = general_offset + (polish_offset if has_polish else 0)
+
+            # Rysuj czarny outline dla value
+            outline_width = 2
+            for dx in range(-outline_width, outline_width + 1):
+                for dy in range(-outline_width, outline_width + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    text_surface_outline = menu_font.render(value_text_upper, True, BLACK)
+                    text_rect_outline = text_surface_outline.get_rect(topright=(value_x + dx, current_y + 20 + y_offset + dy))
+                    screen.blit(text_surface_outline, text_rect_outline)
+
+            # Rysuj właściwy tekst value
+            text_surface = menu_font.render(value_text_upper, True, value_color)
+            text_rect = text_surface.get_rect(topright=(value_x, current_y + 20 + y_offset))
+            screen.blit(text_surface, text_rect)
 
 
 def draw_menu_bottom_buttons():
@@ -1935,12 +2124,65 @@ def draw_submenu_screen(frame):
             draw_text(item["label"], font_medium, WHITE, menu_x + menu_width // 2, y + 20, center=True)
 
             y += item_height + 10
-    
+
+    # Wskaźniki scrollowania
+    total_items = len(submenu_items)
+
+    # Zlicz tylko elementy które są opcjami (pomijamy header, spacer, info)
+    selectable_items = sum(1 for item in submenu_items if item["type"] not in ["header", "spacer", "info"])
+
+    # Pokaż wskaźniki gdy jest więcej niż 8 opcji
+    has_more_below = (scroll_offset + visible_items + 2) < total_items
+    has_more_above = scroll_offset > 0
+
+    # Pokaż wskaźniki gdy jest więcej niż 8 wybieralnych opcji
+    if selectable_items > 8:
+
+        # Strzałka w dół - gdy są więcej opcji poniżej
+        if has_more_below:
+            arrow_y = menu_y + menu_height - 30
+            arrow_x = menu_x + menu_width // 2
+            # Rysuj trójkąt skierowany w dół
+            arrow_size = 15
+            # Czarny outline (większy trójkąt)
+            outline_size = arrow_size + 3
+            pygame.draw.polygon(screen, BLACK, [
+                (arrow_x, arrow_y + outline_size),  # Dolny wierzchołek
+                (arrow_x - outline_size, arrow_y),   # Lewy górny wierzchołek
+                (arrow_x + outline_size, arrow_y)    # Prawy górny wierzchołek
+            ])
+            # Żółty trójkąt na wierzchu
+            pygame.draw.polygon(screen, YELLOW, [
+                (arrow_x, arrow_y + arrow_size),  # Dolny wierzchołek
+                (arrow_x - arrow_size, arrow_y),   # Lewy górny wierzchołek
+                (arrow_x + arrow_size, arrow_y)    # Prawy górny wierzchołek
+            ])
+
+        # Strzałka w górę - gdy są więcej opcji powyżej
+        if has_more_above:
+            arrow_y = menu_y + 80  # Poniżej nagłówka
+            arrow_x = menu_x + menu_width // 2
+            # Rysuj trójkąt skierowany w górę
+            arrow_size = 15
+            # Czarny outline (większy trójkąt)
+            outline_size = arrow_size + 3
+            pygame.draw.polygon(screen, BLACK, [
+                (arrow_x, arrow_y - outline_size),  # Górny wierzchołek
+                (arrow_x - outline_size, arrow_y),   # Lewy dolny wierzchołek
+                (arrow_x + outline_size, arrow_y)    # Prawy dolny wierzchołek
+            ])
+            # Żółty trójkąt na wierzchu
+            pygame.draw.polygon(screen, YELLOW, [
+                (arrow_x, arrow_y - arrow_size),  # Górny wierzchołek
+                (arrow_x - arrow_size, arrow_y),   # Lewy dolny wierzchołek
+                (arrow_x + arrow_size, arrow_y)    # Prawy dolny wierzchołek
+            ])
+
     if submenu_editing:
         instructions = "Up/Down: Zmień | OK: Zatwierdź | MENU: Anuluj"
     else:
         instructions = "Up/Down: Nawigacja | OK: Wybierz | MENU: Wróć"
-    
+
     draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30,
              center=True, bg_color=BLACK, padding=10)
 
@@ -2126,6 +2368,14 @@ def draw_selection_popup():
             arrow_x = popup_x + popup_width // 2
             # Rysuj trójkąt skierowany w dół
             arrow_size = 15
+            # Czarny outline (większy trójkąt)
+            outline_size = arrow_size + 3
+            pygame.draw.polygon(screen, BLACK, [
+                (arrow_x, arrow_y + outline_size),  # Dolny wierzchołek
+                (arrow_x - outline_size, arrow_y),   # Lewy górny wierzchołek
+                (arrow_x + outline_size, arrow_y)    # Prawy górny wierzchołek
+            ])
+            # Żółty trójkąt na wierzchu
             pygame.draw.polygon(screen, YELLOW, [
                 (arrow_x, arrow_y + arrow_size),  # Dolny wierzchołek
                 (arrow_x - arrow_size, arrow_y),   # Lewy górny wierzchołek
@@ -2138,6 +2388,14 @@ def draw_selection_popup():
             arrow_x = popup_x + popup_width // 2
             # Rysuj trójkąt skierowany w górę
             arrow_size = 15
+            # Czarny outline (większy trójkąt)
+            outline_size = arrow_size + 3
+            pygame.draw.polygon(screen, BLACK, [
+                (arrow_x, arrow_y - outline_size),  # Górny wierzchołek
+                (arrow_x - outline_size, arrow_y),   # Lewy dolny wierzchołek
+                (arrow_x + outline_size, arrow_y)    # Prawy dolny wierzchołek
+            ])
+            # Żółty trójkąt na wierzchu
             pygame.draw.polygon(screen, YELLOW, [
                 (arrow_x, arrow_y - arrow_size),  # Górny wierzchołek
                 (arrow_x - arrow_size, arrow_y),   # Lewy dolny wierzchołek
@@ -2681,7 +2939,7 @@ def draw_text_with_outline(text, font, color, outline_color, x, y, center=False)
 def get_display_date():
     """Pobierz datę do wyświetlenia"""
     if camera_settings.get("manual_date"):
-        return camera_settings["manual_date"]
+        return format_manual_date(camera_settings.get("manual_date"))
     else:
         now = datetime.now()
         date_format = camera_settings.get("date_format", "DD/MM/YYYY")
@@ -3583,11 +3841,21 @@ def handle_videos():
 
 
 def handle_menu():
-    global current_state, video_context_menu_selection, multi_select_mode, selected_videos
+    global current_state, video_context_menu_selection, multi_select_mode, selected_videos, menu_value_editing, date_editing
     if current_state == STATE_MAIN and not recording:
         open_menu()
     elif current_state == STATE_MENU:
-        close_menu()
+        if date_editing:
+            # Jeśli edytujemy datę, wyłącz tryb edycji daty
+            date_editing = False
+            print("[MENU] Wyłączono tryb edycji daty")
+        elif menu_value_editing:
+            # Jeśli edytujemy wartość, wyłącz tryb edycji
+            menu_value_editing = False
+            print("[MENU] Wyłączono tryb edycji wartości")
+        else:
+            # Zamknij menu
+            close_menu()
     elif current_state == STATE_SUBMENU:
         close_submenu()
     elif current_state == STATE_SELECTION_POPUP:
@@ -3720,8 +3988,35 @@ def handle_ok():
                     open_selection_popup("date_position", DATE_POSITIONS)
 
                 elif tile_id == "manual_date":
-                    # Otwórz date picker
-                    open_date_picker()
+                    # Włącz tryb edycji daty bezpośrednio w menu
+                    global date_editing, date_edit_day, date_edit_month, date_edit_year, date_edit_segment
+                    date_editing = not date_editing
+                    if date_editing:
+                        # Inicjalizuj wartości z manual_date lub aktualna data
+                        if camera_settings.get("manual_date"):
+                            try:
+                                date_obj = datetime.strptime(camera_settings["manual_date"], "%Y-%m-%d")
+                                date_edit_day = date_obj.day
+                                date_edit_month = date_obj.month
+                                date_edit_year = date_obj.year
+                            except:
+                                now = datetime.now()
+                                date_edit_day = now.day
+                                date_edit_month = now.month
+                                date_edit_year = now.year
+                        else:
+                            now = datetime.now()
+                            date_edit_day = now.day
+                            date_edit_month = now.month
+                            date_edit_year = now.year
+                        date_edit_segment = 0
+                        print("[DATE] Edycja daty włączona")
+                    else:
+                        # Zapisz datę
+                        date_str = f"{date_edit_year:04d}-{date_edit_month:02d}-{date_edit_day:02d}"
+                        camera_settings["manual_date"] = date_str
+                        save_config()
+                        print(f"[DATE] Zapisano datę: {date_str}")
 
                 elif tile_id == "date_format":
                     open_selection_popup("date_format", DATE_FORMATS)
@@ -3743,27 +4038,28 @@ def handle_ok():
                 elif tile_id == "font":
                     open_selection_popup("font_family", FONT_NAMES)
 
-                # Dla sliderów otwórz submenu do precyzyjnej edycji
+                # Dla sliderów włącz/wyłącz tryb edycji wartości
                 elif tile_id in ["brightness", "contrast", "saturation", "sharpness", "exposure", "battery_level"]:
-                    # Mapowanie tile_id na section
-                    section_map = {
-                        "brightness": "manual",
-                        "contrast": "manual",
-                        "saturation": "manual",
-                        "sharpness": "manual",
-                        "exposure": "manual",
-                        "battery_level": "battery"
-                    }
-                    if tile_id in section_map:
-                        open_submenu(section_map[tile_id])
+                    global menu_value_editing
+                    menu_value_editing = not menu_value_editing
+                    if menu_value_editing:
+                        print(f"[EDIT] Edycja wartości: {tile['label']}")
+                    else:
+                        print(f"[EDIT] Zakończono edycję: {tile['label']}")
 
     elif current_state == STATE_SUBMENU:
         submenu_ok()
 
 
 def handle_delete():
-    global current_state, confirm_selection
-    if current_state == STATE_VIDEOS and videos:
+    global current_state, confirm_selection, date_editing, camera_settings
+    if current_state == STATE_MENU and date_editing:
+        # Podczas edycji daty: resetuj do automatycznej daty
+        camera_settings["manual_date"] = None
+        date_editing = False
+        save_config()
+        print("[DATE] Reset do automatycznej daty")
+    elif current_state == STATE_VIDEOS and videos:
         current_state = STATE_CONFIRM
         confirm_selection = 0
 
@@ -3805,11 +4101,49 @@ def handle_down():
 
 
 def handle_left():
-    global confirm_selection
+    global confirm_selection, fake_battery_level, date_edit_segment
     if current_state == STATE_CONFIRM:
         confirm_selection = 0
     elif current_state == STATE_MENU:
-        menu_navigate_left()
+        if date_editing:
+            # W trybie edycji daty: przełącz na poprzedni segment
+            date_edit_segment = max(0, date_edit_segment - 1)
+            print(f"[DATE] Segment: {date_edit_segment}")
+        elif menu_value_editing:
+            # W trybie edycji wartości: zmniejsz wartość
+            section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+            current_section_name = section_names[selected_section]
+            filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+
+            if 0 <= selected_tile < len(filtered_tiles):
+                tile = filtered_tiles[selected_tile]
+                tile_id = tile["id"]
+
+                if tile_id == "brightness":
+                    camera_settings["brightness"] = max(-1.0, camera_settings.get("brightness", 0.0) - 0.1)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "contrast":
+                    camera_settings["contrast"] = max(0.0, camera_settings.get("contrast", 1.0) - 0.1)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "saturation":
+                    camera_settings["saturation"] = max(0.0, camera_settings.get("saturation", 1.0) - 0.1)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "sharpness":
+                    camera_settings["sharpness"] = max(0.0, camera_settings.get("sharpness", 1.0) - 0.2)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "exposure":
+                    camera_settings["exposure_compensation"] = max(-2.0, camera_settings.get("exposure_compensation", 0.0) - 0.2)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "battery_level":
+                    current_level = fake_battery_level if fake_battery_level is not None else 100
+                    fake_battery_level = max(0, current_level - 5)
+        else:
+            menu_navigate_left()
     elif current_state == STATE_VIDEOS:
         videos_navigate_left()
     elif current_state == STATE_DATE_PICKER:
@@ -3817,11 +4151,49 @@ def handle_left():
 
 
 def handle_right():
-    global confirm_selection
+    global confirm_selection, fake_battery_level, date_edit_segment
     if current_state == STATE_CONFIRM:
         confirm_selection = 1
     elif current_state == STATE_MENU:
-        menu_navigate_right()
+        if date_editing:
+            # W trybie edycji daty: przełącz na następny segment
+            date_edit_segment = min(2, date_edit_segment + 1)
+            print(f"[DATE] Segment: {date_edit_segment}")
+        elif menu_value_editing:
+            # W trybie edycji wartości: zwiększ wartość
+            section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+            current_section_name = section_names[selected_section]
+            filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+
+            if 0 <= selected_tile < len(filtered_tiles):
+                tile = filtered_tiles[selected_tile]
+                tile_id = tile["id"]
+
+                if tile_id == "brightness":
+                    camera_settings["brightness"] = min(1.0, camera_settings.get("brightness", 0.0) + 0.1)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "contrast":
+                    camera_settings["contrast"] = min(2.0, camera_settings.get("contrast", 1.0) + 0.1)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "saturation":
+                    camera_settings["saturation"] = min(2.0, camera_settings.get("saturation", 1.0) + 0.1)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "sharpness":
+                    camera_settings["sharpness"] = min(4.0, camera_settings.get("sharpness", 1.0) + 0.2)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "exposure":
+                    camera_settings["exposure_compensation"] = min(2.0, camera_settings.get("exposure_compensation", 0.0) + 0.2)
+                    apply_camera_settings()
+                    save_config()
+                elif tile_id == "battery_level":
+                    current_level = fake_battery_level if fake_battery_level is not None else 100
+                    fake_battery_level = min(100, current_level + 5)
+        else:
+            menu_navigate_right()
     elif current_state == STATE_VIDEOS:
         videos_navigate_right()
     elif current_state == STATE_DATE_PICKER:
