@@ -1891,6 +1891,53 @@ def draw_menu_tiles(frame):
             text_rect = text_surface.get_rect(topright=(value_x, current_y + 20 + y_offset))
             screen.blit(text_surface, text_rect)
 
+    # Wskaźniki scrollowania dla listy opcji
+    # Pokaż wskaźniki gdy jest więcej elementów niż mieści się na ekranie
+    if total_items > visible_items:
+        has_more_below = (scroll_offset + visible_items) < total_items
+        has_more_above = scroll_offset > 0
+
+        # Środek panelu z listą opcji (po prawej)
+        arrow_x = list_panel_x + list_panel_width // 2
+
+        # Strzałka w dół - gdy są więcej opcji poniżej
+        if has_more_below:
+            arrow_y = list_panel_y + list_panel_height - 25
+            # Rysuj trójkąt skierowany w dół
+            arrow_size = 15
+            # Czarny outline (większy trójkąt)
+            outline_size = arrow_size + 3
+            pygame.draw.polygon(screen, BLACK, [
+                (arrow_x, arrow_y + outline_size),  # Dolny wierzchołek
+                (arrow_x - outline_size, arrow_y),   # Lewy górny wierzchołek
+                (arrow_x + outline_size, arrow_y)    # Prawy górny wierzchołek
+            ])
+            # Żółty trójkąt na wierzchu
+            pygame.draw.polygon(screen, YELLOW, [
+                (arrow_x, arrow_y + arrow_size),  # Dolny wierzchołek
+                (arrow_x - arrow_size, arrow_y),   # Lewy górny wierzchołek
+                (arrow_x + arrow_size, arrow_y)    # Prawy górny wierzchołek
+            ])
+
+        # Strzałka w górę - gdy są więcej opcji powyżej
+        if has_more_above:
+            arrow_y = list_panel_y + 25
+            # Rysuj trójkąt skierowany w górę
+            arrow_size = 15
+            # Czarny outline (większy trójkąt)
+            outline_size = arrow_size + 3
+            pygame.draw.polygon(screen, BLACK, [
+                (arrow_x, arrow_y - outline_size),  # Górny wierzchołek
+                (arrow_x - outline_size, arrow_y),   # Lewy dolny wierzchołek
+                (arrow_x + outline_size, arrow_y)    # Prawy dolny wierzchołek
+            ])
+            # Żółty trójkąt na wierzchu
+            pygame.draw.polygon(screen, YELLOW, [
+                (arrow_x, arrow_y - arrow_size),  # Górny wierzchołek
+                (arrow_x - arrow_size, arrow_y),   # Lewy dolny wierzchołek
+                (arrow_x + arrow_size, arrow_y)    # Prawy dolny wierzchołek
+            ])
+
 
 def draw_menu_bottom_buttons():
     """Rysuj dolne przyciski menu - ZAWSZE NA WIERZCHU (wysoki z-index)"""
@@ -4052,13 +4099,66 @@ def handle_ok():
 
 
 def handle_delete():
-    global current_state, confirm_selection, date_editing, camera_settings
+    global current_state, confirm_selection, date_editing, camera_settings, menu_value_editing, selected_tile, menu_editing_mode
+
     if current_state == STATE_MENU and date_editing:
         # Podczas edycji daty: resetuj do automatycznej daty
         camera_settings["manual_date"] = None
         date_editing = False
         save_config()
         print("[DATE] Reset do automatycznej daty")
+    elif current_state == STATE_MENU and (menu_editing_mode or menu_value_editing):
+        # Reset zaznaczonej opcji do wartości fabrycznej
+        # Mapowanie tile ID na klucz ustawienia i wartość domyślną
+        factory_defaults = {
+            "quality": ("video_resolution", "1080p30"),
+            "grid": ("show_grid", True),
+            "font": ("font_family", "HomeVideo"),
+            "wb": ("awb_mode", "auto"),
+            "brightness": ("brightness", 0.0),
+            "contrast": ("contrast", 1.0),
+            "saturation": ("saturation", 1.0),
+            "sharpness": ("sharpness", 1.0),
+            "exposure": ("exposure_compensation", 0.0),
+            "show_date": ("show_date", False),
+            "show_time": ("show_time", False),
+            "date_position": ("date_position", "top_left"),
+            "manual_date": ("manual_date", None),
+            "date_format": ("date_format", "DD/MM/YYYY"),
+            "date_month_text": ("date_month_text", False),
+            "date_separator": ("date_separator", "/"),
+            "date_color": ("date_color", "yellow"),
+            "date_font_size": ("date_font_size", "medium"),
+            "battery_level": ("fake_battery_level", None)  # Specjalny przypadek
+        }
+
+        # Pobierz aktualnie zaznaczony tile
+        section_names = ["Image Quality/Size", "Manual Settings", "Znacznik Daty", "Poziom Baterii"]
+        current_section_name = section_names[selected_section]
+        filtered_tiles = [tile for tile in menu_tiles if tile["section"] == current_section_name]
+
+        if 0 <= selected_tile < len(filtered_tiles):
+            tile = filtered_tiles[selected_tile]
+            tile_id = tile["id"]
+
+            if tile_id in factory_defaults:
+                setting_key, default_value = factory_defaults[tile_id]
+
+                # Specjalne obsługi dla battery_level
+                if tile_id == "battery_level":
+                    global fake_battery_level
+                    fake_battery_level = default_value
+                    print(f"[RESET] Poziom baterii zresetowany do rzeczywistego")
+                else:
+                    camera_settings[setting_key] = default_value
+                    print(f"[RESET] {tile['label']} zresetowany do: {default_value}")
+
+                # Wyłącz tryb edycji wartości jeśli był włączony
+                menu_value_editing = False
+
+                # Zapisz zmiany
+                save_config()
+                apply_camera_settings()
     elif current_state == STATE_VIDEOS and videos:
         current_state = STATE_CONFIRM
         confirm_selection = 0
