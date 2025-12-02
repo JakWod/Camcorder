@@ -39,7 +39,7 @@ ROW_PINS = [17, 22, 23, 27]  # R0, R1, R2, R3
 
 # Mapowanie przycisków w matrycy [row][col]
 # Układ:
-#       C3   C2   C1   C0
+#       C0   C1   C2   C3
 # R0 [ MENU ][ + ][ - ][UP]
 # R1 [    ][RIGHT ][OK][LEFT ]
 # R2 [    ][VID][DEL ][DOWN ]
@@ -4276,9 +4276,12 @@ def handle_delete():
 
 
 def handle_up():
-    global video_context_menu_selection
+    global video_context_menu_selection, last_videos_scroll
     if current_state == STATE_VIDEOS:
-        videos_navigate_up()
+        current_time = time.time()
+        if current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
+            videos_navigate_up()
+            last_videos_scroll = current_time
     elif current_state == STATE_PLAYING:
         print("[VOL] Głośność UP (TBD)")
     elif current_state == STATE_MENU:
@@ -4294,9 +4297,12 @@ def handle_up():
 
 
 def handle_down():
-    global video_context_menu_selection
+    global video_context_menu_selection, last_videos_scroll
     if current_state == STATE_VIDEOS:
-        videos_navigate_down()
+        current_time = time.time()
+        if current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
+            videos_navigate_down()
+            last_videos_scroll = current_time
     elif current_state == STATE_PLAYING:
         print("[VOL] Głośność DOWN (TBD)")
     elif current_state == STATE_MENU:
@@ -4624,14 +4630,8 @@ if __name__ == '__main__':
                     submenu_navigate_down()
                     last_menu_scroll = current_time
 
-            if current_state == STATE_VIDEOS:
-                if is_button_pressed('UP') and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
-                    videos_navigate_up()
-                    last_videos_scroll = current_time
-
-                if is_button_pressed('DOWN') and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
-                    videos_navigate_down()
-                    last_videos_scroll = current_time
+            # STATE_VIDEOS: Nawigacja obsługiwana przez handle_up/down poprzez check_matrix_buttons()
+            # Usunięto ciągłe sprawdzanie is_button_pressed dla STATE_VIDEOS aby uniknąć duplikacji
             
             frame = None
             if current_state in [STATE_MAIN, STATE_MENU, STATE_SUBMENU]:
