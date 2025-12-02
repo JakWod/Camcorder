@@ -1,0 +1,196 @@
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║               MATRYCA 4x4 - PINOUT REFERENCE CARD                             ║
+║                   (Wydrukuj i przyklej obok Pi)                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                       MATRYCA → RASPBERRY PI                                  │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════╦═══════════╦══════════╦═══════════╦═══════════╗
+║ Pin      ║ Nazwa     ║ GPIO     ║ Fizyczny  ║ Typ       ║
+║ matrycy  ║           ║ (BCM)    ║ pin na Pi ║           ║
+╠══════════╬═══════════╬══════════╬═══════════╬═══════════╣
+║ Pin 1    ║ C3        ║ GPIO 5   ║ 29        ║ OUTPUT    ║
+║ Pin 2    ║ C2        ║ GPIO 6   ║ 31        ║ OUTPUT    ║
+║ Pin 3    ║ C1        ║ GPIO 13  ║ 33        ║ OUTPUT    ║
+║ Pin 4    ║ C0        ║ GPIO 19  ║ 35        ║ OUTPUT    ║
+╠══════════╬═══════════╬══════════╬═══════════╬═══════════╣
+║ Pin 5    ║ R0        ║ GPIO 17  ║ 11        ║ INPUT     ║
+║ Pin 6    ║ R1        ║ GPIO 22  ║ 15        ║ INPUT     ║
+║ Pin 7    ║ R2        ║ GPIO 23  ║ 16        ║ INPUT     ║
+║ Pin 8    ║ R3        ║ GPIO 27  ║ 13        ║ INPUT     ║
+╚══════════╩═══════════╩══════════╩═══════════╩═══════════╝
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                         RASPBERRY PI GPIO HEADER                              │
+│                        (Widok z góry, USB na dole)                            │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+           ┌─────────────────────────────────────────────┐
+           │  3.3V [ 1]●   ● [ 2] 5V                     │
+           │  GP 2 [ 3]●   ● [ 4] 5V                     │
+           │  GP 3 [ 5]●   ● [ 6] GND                    │
+           │  GP 4 [ 7]●   ● [ 8] GP 14                  │
+           │   GND [ 9]●   ● [10] GP 15                  │
+           │                                              │
+      R0 ──┼─ GP17 [11]●   ● [12] GP 18                  │
+      R3 ──┼─ GP27 [13]●   ● [14] GND                    │
+      R1 ──┼─ GP22 [15]●   ● [16] GP 23 ── R2           │
+           │  3.3V [17]●   ● [18] GP 24                  │
+           │ GP 10 [19]●   ● [20] GND                    │
+           │  GP 9 [21]●   ● [22] GP 25                  │
+           │ GP 11 [23]●   ● [24] GP  8                  │
+           │   GND [25]●   ● [26] GP  7                  │
+           │  GP 0 [27]●   ● [28] GP  1                  │
+           │                                              │
+      C3 ──┼─ GP 5 [29]●   ● [30] GND                    │
+      C2 ──┼─ GP 6 [31]●   ● [32] GP 12                  │
+      C1 ──┼─ GP13 [33]●   ● [34] GND                    │
+      C0 ──┼─ GP19 [35]●   ● [36] GP 16                  │
+           │ GP 26 [37]●   ● [38] GP 20                  │
+           │   GND [39]●   ● [40] GP 21                  │
+           │                                              │
+           └─────────────────────────────────────────────┘
+                             │
+                          [USB, HDMI, Ethernet...]
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                    QUICK CHEAT SHEET - PRZYCISKI                              │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+   POZYCJA        KOD          FUNKCJA           UŻYCIE
+   ───────────────────────────────────────────────────────────────
+   (R0, C3)       'UP'         Góra              Nawigacja
+   (R2, C3)       'DOWN'       Dół               Nawigacja
+   (R1, C3)       'LEFT'       Lewo              Nawigacja / Cofanie
+   (R1, C1)       'RIGHT'      Prawo             Nawigacja / Przewijanie
+   (R1, C2)       'OK'         Potwierdzenie     Akcja / Pauza
+   (R0, C0)       'MENU'       Menu              Otwórz ustawienia
+   (R3, C3)       'RECORD'     Nagrywanie        Start/Stop
+   (R2, C1)       'VIDEOS'     Lista filmów      Przeglądarka
+   (R2, C2)       'DELETE'     Usuń              Usuń film
+   (R0, C1)       'PLUS'       Zoom +            Przybliżenie
+   (R0, C2)       'MINUS'      Zoom -            Oddalenie
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                           TESTOWANIE                                          │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+   $ python3 test_matryca.py
+
+   Oczekiwany output:
+   ══════════════════════════════════════════════════════════
+      TEST MATRYCY PRZYCISKÓW 4x4 - RASPBERRY PI 5
+   ══════════════════════════════════════════════════════════
+   [OK] Matryca zainicjalizowana
+
+   Naciśnij przyciski aby je przetestować...
+   Ctrl+C aby zakończyć
+
+   Oczekiwane przyciski:
+     - DELETE     (Rząd 2, Kolumna 2)
+     - DOWN       (Rząd 2, Kolumna 3)
+     - LEFT       (Rząd 1, Kolumna 3)
+     - MENU       (Rząd 0, Kolumna 0)
+     - MINUS      (Rząd 0, Kolumna 2)
+     - OK         (Rząd 1, Kolumna 2)
+     - PLUS       (Rząd 0, Kolumna 1)
+     - RECORD     (Rząd 3, Kolumna 3)
+     - RIGHT      (Rząd 1, Kolumna 1)
+     - UP         (Rząd 0, Kolumna 3)
+     - VIDEOS     (Rząd 2, Kolumna 1)
+
+   Czekam na naciśnięcia...
+
+   ✓ Naciśnięto: OK         | Czas: 14:23:45
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                   MATRYCA - JAK TO DZIAŁA?                                    │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+   Matryca 4x4 = 16 przycisków, ale tylko 8 pinów!
+
+   KOLUMNY (C0-C3):
+   ────────────────
+   - Ustawione jako OUTPUT
+   - Domyślnie HIGH (nieaktywne)
+   - Program aktywuje jedną kolumnę na raz (LOW)
+
+   RZĘDY (R0-R3):
+   ──────────────
+   - Ustawione jako INPUT z pull-up
+   - Domyślnie HIGH (żaden przycisk nie naciśnięty)
+   - Gdy przycisk naciśnięty → rząd idzie LOW
+
+   SKANOWANIE:
+   ───────────
+   1. Ustaw C0 na LOW, sprawdź R0-R3
+   2. Ustaw C0 na HIGH
+   3. Ustaw C1 na LOW, sprawdź R0-R3
+   4. ... i tak dalej dla C2, C3
+
+   Jeśli podczas sprawdzania C2 wykryjemy R1=LOW,
+   to przycisk (R1, C2) = OK jest naciśnięty!
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                         TROUBLESHOOTING                                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+   PROBLEM: Przyciski nie działają wcale
+   ──────────────────────────────────────
+   • Sprawdź czy wszystkie 8 pinów jest podłączonych
+   • Sprawdź czy przewody są w dobrych GPIO (nie 5V/GND!)
+   • Uruchom: gpio readall (sprawdź status pinów)
+
+   PROBLEM: Niektóre przyciski nie działają
+   ────────────────────────────────────────
+   • Sprawdź połączenie konkretnej kolumny/rzędu
+   • Test matrycy pokaże które przyciski działają
+   • Możliwy zły kontakt w przewodzie
+
+   PROBLEM: Złe przyciski są wykrywane
+   ───────────────────────────────────
+   • Twoja matryca ma inny układ fizyczny
+   • Dostosuj BUTTON_MAP w kontrola_wersji.py
+   • Użyj test_matryca.py aby zidentyfikować prawdziwy układ
+
+   PROBLEM: Ghost buttons (fałszywe naciśnięcia)
+   ──────────────────────────────────────────────
+   • Normalne w matrycach bez diod
+   • Zwiększ czas debounce (linia 3221)
+   • Dodaj diody 1N4148 w szereg z przyciskami
+
+   PROBLEM: "RuntimeError: This channel is already in use"
+   ────────────────────────────────────────────────────────
+   • Inny proces używa GPIO
+   • Uruchom: sudo pkill -9 python3
+   • Następnie uruchom program ponownie
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                   KONFIGURACJA W KODZIE                                       │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+   kontrola_wersji.py - KLUCZOWE SEKCJE:
+   ─────────────────────────────────────
+
+   LINIE 35-37:  COL_PINS = [19, 13, 6, 5]     ← GPIO dla kolumn
+   LINIE 37-38:  ROW_PINS = [17, 22, 23, 27]   ← GPIO dla rzędów
+
+   LINIE 47-59:  BUTTON_MAP = { ... }           ← Mapowanie przycisków
+
+   LINIA 3180:   init_matrix()                  ← Inicjalizacja GPIO
+   LINIA 3202:   scan_matrix()                  ← Skanowanie matrycy
+   LINIA 3247:   is_button_pressed(button_name) ← Sprawdź stan
+
+   LINIA 4530:   init_matrix()                  ← Wywołanie w main
+   LINIA 4569:   check_matrix_buttons()         ← W pętli głównej
+
+═══════════════════════════════════════════════════════════════════════════════
+
+                          🎮 MATRYCA 4x4 READY! 🎮
+
+Wszystko gotowe! Podłącz matrycę według schematu i ciesz się kompaktowym
+systemem przycisków. Zamiast 11 pinów, używasz tylko 8!
+
+═══════════════════════════════════════════════════════════════════════════════

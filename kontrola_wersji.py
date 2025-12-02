@@ -11,6 +11,7 @@ from picamera2 import Picamera2
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
 from gpiozero import Button
+import RPi.GPIO as GPIO
 import signal
 import subprocess
 import time
@@ -30,18 +31,33 @@ THUMBNAIL_DIR = VIDEO_DIR / "thumbnails"
 THUMBNAIL_DIR.mkdir(exist_ok=True)
 CONFIG_FILE = VIDEO_DIR / "camera_config.json"
 
-# GPIO Pins
-PIN_RECORD = 17
-PIN_OK = 22
-PIN_VIDEOS = 23
-PIN_DELETE = 24
-PIN_UP = 5
-PIN_DOWN = 6
-PIN_LEFT = 13
-PIN_RIGHT = 19
-PIN_MENU = 27
-PIN_PLUS = 9
-PIN_MINUS = 11
+# GPIO Pins - Matryca 4x4
+# Kolumny (outputs)
+COL_PINS = [19, 13, 6, 5]  # C0, C1, C2, C3
+# Rzędy (inputs z pull-up)
+ROW_PINS = [17, 22, 23, 27]  # R0, R1, R2, R3
+
+# Mapowanie przycisków w matrycy [row][col]
+# Układ:
+#       C3   C2   C1   C0
+# R0 [ MENU ][ + ][ - ][UP]
+# R1 [    ][RIGHT ][OK][LEFT ]
+# R2 [    ][VID][DEL ][DOWN ]
+# R3 [ ][   ][    ][REC  ]
+
+BUTTON_MAP = {
+    (0, 3): 'UP',      # R0, C3
+    (0, 2): 'MINUS',   # R0, C2
+    (0, 1): 'PLUS',    # R0, C1
+    (0, 0): 'MENU',    # R0, C0
+    (1, 3): 'LEFT',    # R1, C3
+    (1, 2): 'OK',      # R1, C2
+    (1, 1): 'RIGHT',   # R1, C1
+    (2, 3): 'DOWN',    # R2, C3
+    (2, 2): 'DELETE',  # R2, C2
+    (2, 1): 'VIDEOS',  # R2, C1
+    (3, 3): 'RECORD',  # R3, C3
+}
 
 # Kolory
 BLACK = (0, 0, 0)
@@ -80,6 +96,12 @@ screen = None
 current_state = STATE_MAIN
 confirm_selection = 0
 fake_battery_level = None  # None = użyj rzeczywistego poziomu, lub wartość 0-100
+
+# Matryca przycisków
+matrix_cols = []
+matrix_rows = []
+last_button_press = {}  # Słownik do debounce
+button_handlers = {}  # Słownik handler'ów dla każdego przycisku
 
 # Video Player
 video_capture = None
@@ -2788,7 +2810,7 @@ def draw_recording_indicator():
             pygame.draw.circle(screen, RED, (rec_x + 10, rec_y + 15), 8)
 
         draw_text_with_outline("REC", font_medium, RED, BLACK, rec_x + 30, rec_y)
-        draw_text_with_outline(time_text, font_medium, RED, BLACK, rec_x + 95, rec_y)
+        # draw_text_with_outline(time_text, font_medium, RED, BLACK, rec_x + 95, rec_y)
     else:
         draw_text_with_outline("STBY", font_large, GREEN, BLACK, rec_x, rec_y)
 
@@ -3149,6 +3171,95 @@ def load_fonts():
         font_small = pygame.font.Font(None, 30)
         font_tiny = pygame.font.Font(None, 24)
         menu_font = pygame.font.Font(None, 65)
+
+
+# ============================================================================
+# OBSŁUGA MATRYCY PRZYCISKÓW 4x4
+# ============================================================================
+
+def init_matrix():
+    """Inicjalizuj matrycę przycisków 4x4"""
+    global matrix_cols, matrix_rows
+
+    print("[MATRIX] Inicjalizacja matrycy 4x4...")
+
+    # Ustaw tryb BCM (numeracja GPIO)
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+
+    # Konfiguruj kolumny jako wyjścia (output)
+    for col_pin in COL_PINS:
+        GPIO.setup(col_pin, GPIO.OUT)
+        GPIO.output(col_pin, GPIO.HIGH)  # Ustaw na HIGH (nieaktywne)
+
+    # Konfiguruj rzędy jako wejścia z pull-up
+    for row_pin in ROW_PINS:
+        GPIO.setup(row_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    print("[OK] Matryca 4x4 OK")
+
+
+def scan_matrix():
+    """Skanuj matrycę i zwróć naciśnięte przyciski"""
+    pressed_buttons = []
+    current_time = time.time()
+
+    # Przeskanuj każdą kolumnę
+    for col_idx, col_pin in enumerate(COL_PINS):
+        # Aktywuj kolumnę (LOW)
+        GPIO.output(col_pin, GPIO.LOW)
+
+        # Daj czas na ustabilizowanie się sygnału
+        time.sleep(0.001)
+
+        # Sprawdź wszystkie rzędy
+        for row_idx, row_pin in enumerate(ROW_PINS):
+            if GPIO.input(row_pin) == GPIO.LOW:  # Przycisk naciśnięty
+                button_key = (row_idx, col_idx)
+
+                # Debounce - sprawdź czy minęło 300ms od ostatniego naciśnięcia
+                if button_key not in last_button_press or \
+                   current_time - last_button_press[button_key] > 0.3:
+
+                    if button_key in BUTTON_MAP:
+                        button_name = BUTTON_MAP[button_key]
+                        pressed_buttons.append(button_name)
+                        last_button_press[button_key] = current_time
+
+        # Dezaktywuj kolumnę (HIGH)
+        GPIO.output(col_pin, GPIO.HIGH)
+
+    return pressed_buttons
+
+
+def check_matrix_buttons():
+    """Sprawdź matrycę i wywołaj odpowiednie handlery"""
+    pressed = scan_matrix()
+
+    for button_name in pressed:
+        if button_name in button_handlers:
+            handler = button_handlers[button_name]
+            if handler:
+                print(f"[MATRIX] Przycisk: {button_name}")
+                handler()
+
+
+def is_button_pressed(button_name):
+    """Sprawdź czy dany przycisk jest obecnie naciśnięty (dla continuous input)"""
+    for col_idx, col_pin in enumerate(COL_PINS):
+        GPIO.output(col_pin, GPIO.LOW)
+        time.sleep(0.001)
+
+        for row_idx, row_pin in enumerate(ROW_PINS):
+            button_key = (row_idx, col_idx)
+            if button_key in BUTTON_MAP and BUTTON_MAP[button_key] == button_name:
+                if GPIO.input(row_pin) == GPIO.LOW:
+                    GPIO.output(col_pin, GPIO.HIGH)
+                    return True
+
+        GPIO.output(col_pin, GPIO.HIGH)
+
+    return False
 
 
 def init_pygame():
@@ -4397,7 +4508,14 @@ def cleanup(signum=None, frame=None):
             pass
     
     save_config()
-    
+
+    # Cleanup GPIO
+    try:
+        GPIO.cleanup()
+        print("[OK] GPIO cleanup OK")
+    except:
+        pass
+
     try:
         pygame.quit()
     except:
@@ -4414,33 +4532,22 @@ if __name__ == '__main__':
     
     init_pygame()
     init_camera()
-    
-    print("\n[GPIO] GPIO init...")
-    btn_record = Button(PIN_RECORD, pull_up=True, bounce_time=0.3)
-    btn_ok = Button(PIN_OK, pull_up=True, bounce_time=0.3)
-    btn_videos = Button(PIN_VIDEOS, pull_up=True, bounce_time=0.3)
-    btn_delete = Button(PIN_DELETE, pull_up=True, bounce_time=0.3)
-    btn_up = Button(PIN_UP, pull_up=True, bounce_time=0.3)
-    btn_down = Button(PIN_DOWN, pull_up=True, bounce_time=0.3)
-    btn_left = Button(PIN_LEFT, pull_up=True, bounce_time=0.3)
-    btn_right = Button(PIN_RIGHT, pull_up=True, bounce_time=0.3)
-    btn_menu = Button(PIN_MENU, pull_up=True, bounce_time=0.3)
-    btn_plus = Button(PIN_PLUS, pull_up=True, bounce_time=0.3)
-    btn_minus = Button(PIN_MINUS, pull_up=True, bounce_time=0.3)
-    
-    btn_record.when_pressed = handle_record
-    btn_ok.when_pressed = handle_ok
-    btn_videos.when_pressed = handle_videos
-    btn_delete.when_pressed = handle_delete
-    btn_up.when_pressed = handle_up
-    btn_down.when_pressed = handle_down
-    btn_left.when_pressed = handle_left
-    btn_right.when_pressed = handle_right
-    btn_menu.when_pressed = handle_menu
-    btn_plus.when_pressed = handle_zoom_in
-    btn_minus.when_pressed = handle_zoom_out
-    
-    print("[OK] GPIO OK")
+
+    # Inicjalizacja matrycy przycisków 4x4
+    init_matrix()
+
+    # Przypisanie handler'ów do przycisków
+    button_handlers['RECORD'] = handle_record
+    button_handlers['OK'] = handle_ok
+    button_handlers['VIDEOS'] = handle_videos
+    button_handlers['DELETE'] = handle_delete
+    button_handlers['UP'] = handle_up
+    button_handlers['DOWN'] = handle_down
+    button_handlers['LEFT'] = handle_left
+    button_handlers['RIGHT'] = handle_right
+    button_handlers['MENU'] = handle_menu
+    button_handlers['PLUS'] = handle_zoom_in
+    button_handlers['MINUS'] = handle_zoom_out
     
     print("\n" + "="*70)
     print("[SYSTEM] SYSTEM KAMERA - RASPBERRY PI 5")
@@ -4462,64 +4569,67 @@ if __name__ == '__main__':
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         cleanup()
-            
+
             current_time = time.time()
-            
+
+            # Skanuj matrycę przycisków i wywołaj handlery
+            check_matrix_buttons()
+
             if current_state == STATE_PLAYING:
-                if btn_right.is_pressed:
+                if is_button_pressed('RIGHT'):
                     if hold_start_right is None:
                         hold_start_right = current_time
                 else:
                     hold_start_right = None
 
-                if btn_left.is_pressed:
+                if is_button_pressed('LEFT'):
                     if hold_start_left is None:
                         hold_start_left = current_time
                 else:
                     hold_start_left = None
-                
-                if btn_right.is_pressed:
+
+                if is_button_pressed('RIGHT'):
                     if hold_start_right is not None and current_time - hold_start_right >= 4 and current_time - hold_start_right < 10:
-                        seek_video(1.0)   
+                        seek_video(1.0)
                     elif hold_start_right is not None and current_time - hold_start_right >= 10:
                         seek_video(2.5)
                     else:
                         seek_video(0.5)
                     last_continuous_seek = current_time
 
-                elif btn_left.is_pressed:
+                elif is_button_pressed('LEFT'):
                     if hold_start_left is not None and 4 <= current_time - hold_start_left and 10 > current_time - hold_start_left:
-                        seek_video(-1.0)   
+                        seek_video(-1.0)
                     elif hold_start_left is not None and current_time - hold_start_left >= 10:
                         seek_video(-2.5)
                     else:
                         seek_video(-0.5)
                     last_continuous_seek = current_time
-            
+
             if current_state == STATE_MAIN:
-                if btn_plus.is_pressed and current_time - last_zoom_time >= 0.05:
+                if is_button_pressed('PLUS') and current_time - last_zoom_time >= 0.05:
                     adjust_zoom(ZOOM_STEP)
                     last_zoom_time = current_time
-                
-                if btn_minus.is_pressed and current_time - last_zoom_time >= 0.05:
+
+                if is_button_pressed('MINUS') and current_time - last_zoom_time >= 0.05:
                     adjust_zoom(-ZOOM_STEP)
                     last_zoom_time = current_time
-            
+
             if current_state == STATE_SUBMENU:
-                if btn_up.is_pressed and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
+                if is_button_pressed('UP') and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
                     submenu_navigate_up()
                     last_menu_scroll = current_time
-                
-                if btn_down.is_pressed and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
+
+                if is_button_pressed('DOWN') and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
                     submenu_navigate_down()
                     last_menu_scroll = current_time
-            
+
             if current_state == STATE_VIDEOS:
-                if btn_up.is_pressed and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
+                if is_button_pressed('UP') and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
                     videos_navigate_up()
                     last_videos_scroll = current_time
-                
-                if btn_down.is_pressed and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
+
+                if is_button_pressed('DOWN') and current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
                     videos_navigate_down()
                     last_videos_scroll = current_time
             
