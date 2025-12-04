@@ -812,12 +812,17 @@ def add_date_overlay_to_video(video_path):
         font_size_name = camera_settings.get("date_font_size", "medium")
         font_size = font_size_map.get(font_size_name, 40)
 
+        # Pobierz ścieżkę do wybranej czcionki z ustawień
+        font_family = camera_settings.get("font_family", "HomeVideo")
+        font_config = FONT_DEFINITIONS.get(font_family, FONT_DEFINITIONS["HomeVideo"])
+        font_path_ffmpeg = font_config["path"]
+
         temp_file = video_path.parent / f"temp_{video_path.name}"
 
         # Filtr drawtext
         drawtext_filter = (
             f"drawtext="
-            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
+            f"fontfile={font_path_ffmpeg}:"
             f"text='{date_text_escaped}':"
             f"fontcolor={color_name}:"
             f"fontsize={font_size}:"
@@ -2795,7 +2800,7 @@ def draw_zoom_bar():
 
 def draw_recording_indicator():
     """Rysuj wskaźnik nagrywania lub STBY"""
-    rec_x = 585  
+    rec_x = 585
     rec_y = 30
 
     if recording and recording_start_time:
@@ -2803,14 +2808,32 @@ def draw_recording_indicator():
         hours = int(elapsed_time // 3600)
         minutes = int((elapsed_time % 3600) // 60)
         seconds = int(elapsed_time % 60)
-        milliseconds = int((elapsed_time % 1) * 100)
-        time_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}:{milliseconds:02d}"
+
+        # Oblicz klatki na podstawie FPS
+        frames = int((elapsed_time % 1) * current_recording_fps) if current_recording_fps else 0
+
+        # Timecode w formacie HH:MM:SS:FF
+        timecode_text = f"TC {hours:02d}:{minutes:02d}:{seconds:02d}:{frames:02d}"
 
         if int(pygame.time.get_ticks() / 500) % 2:
             pygame.draw.circle(screen, RED, (rec_x + 10, rec_y + 15), 8)
 
-        draw_text_with_outline("REC", font_medium, RED, BLACK, rec_x + 30, rec_y)
-        # draw_text_with_outline(time_text, font_medium, RED, BLACK, rec_x + 95, rec_y)
+        # Rysuj napis REC
+        draw_text_with_outline("REC", menu_font, RED, BLACK, rec_x + 30, rec_y)
+
+        # Oblicz szerokość napisu REC aby wyśrodkować timecode
+        rec_text_surface = menu_font.render("REC", True, RED)
+        rec_text_width = rec_text_surface.get_width()
+
+        # Oblicz szerokość timecode
+        tc_text_surface = menu_font.render(timecode_text, True, WHITE)
+        tc_text_width = tc_text_surface.get_width()
+
+        # Wyśrodkuj timecode pod napisem REC
+        tc_x = rec_x + 30 + (rec_text_width - tc_text_width) // 2
+        tc_y = rec_y + 35  # 35 pikseli poniżej napisu REC
+
+        draw_text_with_outline(timecode_text, menu_font, WHITE, BLACK, tc_x, tc_y + 15)
     else:
         draw_text_with_outline("STBY", font_large, GREEN, BLACK, rec_x, rec_y)
 
