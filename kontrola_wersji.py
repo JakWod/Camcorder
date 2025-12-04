@@ -160,11 +160,7 @@ popup_options = []
 popup_selected = 0
 popup_tile_id = None
 
-# SD Card Icons
-sd_icon_surface = None
-no_sd_icon_surface = None
-SD_ICON_FILE = None
-NO_SD_ICON_FILE = None
+# SD Card Icons - REMOVED (replaced with zoom indicator)
 
 # Camera Settings
 camera_settings = {
@@ -259,152 +255,6 @@ VIDEOS_SCROLL_DELAY = 0.25
 
 
 # ============================================================================
-# FUNKCJE POMOCNICZE DLA IKON
-# ============================================================================
-
-def find_icon_file(base_name):
-    """Znajdź plik ikony z dowolnym rozszerzeniem"""
-    extensions = ['.png', '.PNG', '.jpg', '.JPG', '.jpeg', '.JPEG']
-    
-    for ext in extensions:
-        path = VIDEO_DIR / f"{base_name}{ext}"
-        if path.exists():
-            print(f"[OK] Znaleziono ikonę: {path.name}")
-            return path
-    
-    print(f"[WARN] Nie znaleziono ikony: {base_name}")
-    return None
-
-
-def create_fallback_sd_icon(size, is_available):
-    """Stwórz prostą ikonę zastępczą"""
-    surface = pygame.Surface(size, pygame.SRCALPHA)
-    w, h = size
-    
-    if is_available:
-        # Zielona ikona karty SD
-        # Tło karty
-        pygame.draw.rect(surface, GREEN, (5, 15, w-10, h-20), border_radius=5)
-        pygame.draw.rect(surface, WHITE, (5, 15, w-10, h-20), 3, border_radius=5)
-        
-        # Wcięcie karty SD (góra)
-        notch_width = 16
-        notch_height = 8
-        notch_x = w//2 - notch_width//2
-        pygame.draw.rect(surface, BLACK, (notch_x, 15, notch_width, notch_height))
-        
-        # Kontakty na karcie (poziome linie)
-        for i in range(4):
-            y = 28 + i * 6
-            pygame.draw.line(surface, DARK_GRAY, (12, y), (w-12, y), 2)
-        
-        # Tekst SD
-        font = pygame.font.Font(None, 20)
-        text = font.render("SD", True, WHITE)
-        text_rect = text.get_rect(center=(w//2, h-15))
-        surface.blit(text, text_rect)
-    else:
-        # Czerwona ikona braku karty
-        # Tło karty
-        pygame.draw.rect(surface, RED, (5, 15, w-10, h-20), border_radius=5)
-        pygame.draw.rect(surface, WHITE, (5, 15, w-10, h-20), 3, border_radius=5)
-        
-        # Duży krzyżyk X
-        margin = 12
-        pygame.draw.line(surface, WHITE, (margin, 20), (w-margin, h-5), 5)
-        pygame.draw.line(surface, WHITE, (w-margin, 20), (margin, h-5), 5)
-        
-        # Tekst NO
-        font = pygame.font.Font(None, 18)
-        text = font.render("NO", True, WHITE)
-        text_rect = text.get_rect(center=(w//2, h//2))
-        # Cień
-        shadow = font.render("NO", True, BLACK)
-        shadow_rect = shadow.get_rect(center=(w//2+1, h//2+1))
-        surface.blit(shadow, shadow_rect)
-        surface.blit(text, text_rect)
-    
-    return surface
-
-
-def load_sd_icons():
-    """Wczytaj ikony kart SD"""
-    global sd_icon_surface, no_sd_icon_surface, SD_ICON_FILE, NO_SD_ICON_FILE
-    
-    icon_size = (60, 60)
-    
-    print("\n" + "="*60)
-    print("[INFO] ŁADOWANIE IKON SD CARD")
-    print("="*60)
-    print(f"[DIR] Katalog: {VIDEO_DIR}")
-    
-    # Lista wszystkich plików w katalogu (dla diagnostyki)
-    try:
-        all_files = list(VIDEO_DIR.glob("*"))
-        print(f"[LIST] Pliki w katalogu ({len(all_files)}):")
-        for f in all_files[:15]:  # Pokaż pierwsze 15
-            if f.is_file():
-                print(f"   - {f.name}")
-    except Exception as e:
-        print(f"[WARN] Nie można listować plików: {e}")
-    
-    print()
-    
-    # Szukaj ikony SD (karta włożona)
-    SD_ICON_FILE = find_icon_file("sd")
-    
-    if SD_ICON_FILE and SD_ICON_FILE.exists():
-        try:
-            print(f"[LOAD] Wczytywanie: {SD_ICON_FILE}")
-            print(f"   Rozmiar pliku: {SD_ICON_FILE.stat().st_size} bajtów")
-            
-            sd_img = pygame.image.load(str(SD_ICON_FILE))
-            original_size = sd_img.get_size()
-            print(f"   Oryginalny rozmiar: {original_size}")
-            
-            sd_icon_surface = pygame.transform.smoothscale(sd_img, icon_size)
-            print(f"[OK] Ikona SD wczytana i przeskalowana do {icon_size}")
-            
-        except Exception as e:
-            print(f"[ERROR] Błąd wczytywania {SD_ICON_FILE.name}: {e}")
-            print(f"   Tworzę ikonę zastępczą...")
-            sd_icon_surface = create_fallback_sd_icon(icon_size, True)
-    else:
-        print(f"[WARN] Brak pliku ikony SD - używam ikony zastępczej")
-        sd_icon_surface = create_fallback_sd_icon(icon_size, True)
-    
-    print()
-    
-    # Szukaj ikony NO SD (brak karty)
-    NO_SD_ICON_FILE = find_icon_file("nosd")
-    
-    if NO_SD_ICON_FILE and NO_SD_ICON_FILE.exists():
-        try:
-            print(f"[LOAD] Wczytywanie: {NO_SD_ICON_FILE}")
-            print(f"   Rozmiar pliku: {NO_SD_ICON_FILE.stat().st_size} bajtów")
-            
-            no_sd_img = pygame.image.load(str(NO_SD_ICON_FILE))
-            original_size = no_sd_img.get_size()
-            print(f"   Oryginalny rozmiar: {original_size}")
-            
-            no_sd_icon_surface = pygame.transform.smoothscale(no_sd_img, icon_size)
-            print(f"[OK] Ikona NO SD wczytana i przeskalowana do {icon_size}")
-            
-        except Exception as e:
-            print(f"[ERROR] Błąd wczytywania {NO_SD_ICON_FILE.name}: {e}")
-            print(f"   Tworzę ikonę zastępczą...")
-            no_sd_icon_surface = create_fallback_sd_icon(icon_size, False)
-    else:
-        print(f"[WARN] Brak pliku ikony NO SD - używam ikony zastępczej")
-        no_sd_icon_surface = create_fallback_sd_icon(icon_size, False)
-    
-    print()
-    print("="*60)
-    print("[OK] IKONY SD GOTOWE")
-    print("="*60 + "\n")
-
-
-# ============================================================================
 # FUNKCJE SD CARD
 # ============================================================================
 
@@ -490,36 +340,20 @@ def format_manual_date(date_str):
         return f"{year}{separator}{month}{separator}{day}"
 
 
-def draw_sd_card_info():
-    """Rysuj informacje o karcie SD"""
-    sd_x = SCREEN_WIDTH - 100
-    sd_y = 70  # Poniżej baterii
-    
-    # Sprawdź czy karta jest dostępna
-    sd_available = check_sd_card()
-    
-    # Narysuj odpowiednią ikonę
-    if sd_available and sd_icon_surface:
-        screen.blit(sd_icon_surface, (sd_x, sd_y))
-    elif not sd_available and no_sd_icon_surface:
-        screen.blit(no_sd_icon_surface, (sd_x, sd_y))
-    else:
-        # Fallback - rysuj tekst
-        draw_text_with_outline("SD" if sd_available else "NO", font_tiny, 
-                              GREEN if sd_available else RED, BLACK, sd_x + 15, sd_y + 20)
-    
-    # Informacje tekstowe poniżej ikony
-    info_y = sd_y + 65
-    
-    if sd_available:
-        # Czas nagrywania i jakość nagrywania obok siebie, 10 jednostek niżej
-        time_text = get_recording_time_estimate()
-        quality_text = get_recording_quality()
-        combined_text = f"{time_text} | {quality_text}"
-        draw_text_with_outline(combined_text, font_medium, WHITE, BLACK, sd_x - 175, info_y + 15)
-    else:
-        # Brak karty
-        draw_text_with_outline("BRAK SD", font_tiny, RED, BLACK, sd_x - 15, info_y)
+def draw_zoom_indicator():
+    """Rysuj wskaźnik zoomu Z99 (zawsze widoczny)"""
+    zoom_x = SCREEN_WIDTH - 100
+    zoom_y = 72  # Poniżej baterii
+
+    # Pobierz poziom zoomu (0.0 - 1.0) i przelicz na procenty (0-99)
+    zoom_level = camera_settings.get("zoom", 0.0)
+    zoom_percent = int(zoom_level * 99)
+
+    # Tekst wskaźnika zoomu w formacie Z99
+    zoom_text = f"Z{zoom_percent:02d}"
+
+    # Rysuj wskaźnik zoomu z białym tekstem i czarnym obramowaniem
+    draw_text_with_outline(zoom_text, font_large, WHITE, BLACK, zoom_x, zoom_y)
 
 
 # ============================================================================
@@ -3309,9 +3143,6 @@ def init_pygame():
     screen.fill(BLACK)
     pygame.display.flip()
 
-    # Wczytaj ikony SD
-    load_sd_icons()
-
     print("[OK] Pygame OK")
 
 
@@ -3564,10 +3395,10 @@ def draw_main_screen(frame):
     draw_grid_overlay()
     draw_date_overlay()
     draw_battery_icon()
+    draw_zoom_indicator()  # Wskaźnik zoomu zawsze widoczny
 
     # Ukryj elementy UI podczas nagrywania
     if not recording:
-        draw_sd_card_info()
         draw_menu_button()
         draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
                  font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
