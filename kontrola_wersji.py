@@ -131,6 +131,7 @@ font_tiny = None
 menu_font = None
 SCREEN_WIDTH = 0
 SCREEN_HEIGHT = 0
+playback_icon = None  # Obrazek ikony playback
 
 # Menu System
 menu_tiles = []
@@ -341,8 +342,8 @@ def format_manual_date(date_str):
 
 
 def draw_zoom_indicator():
-    """Rysuj wskaźnik zoomu Z99 (zawsze widoczny)"""
-    zoom_x = SCREEN_WIDTH - 100
+    """Rysuj wskaźnik zoomu Z99, AF AUTO i balans bieli (zawsze widoczne, wyrównane do prawej)"""
+    zoom_right_edge = SCREEN_WIDTH - 20  # Margines od prawej krawędzi
     zoom_y = 72  # Poniżej baterii
 
     # Pobierz poziom zoomu (0.0 - 1.0) i przelicz na procenty (0-99)
@@ -352,8 +353,49 @@ def draw_zoom_indicator():
     # Tekst wskaźnika zoomu w formacie Z99
     zoom_text = f"Z{zoom_percent:02d}"
 
+    # Oblicz pozycję x aby wyrównać do prawej
+    zoom_text_surface = font_large.render(zoom_text, True, WHITE)
+    zoom_text_width = zoom_text_surface.get_width()
+    zoom_x = zoom_right_edge - zoom_text_width
+
     # Rysuj wskaźnik zoomu z białym tekstem i czarnym obramowaniem
     draw_text_with_outline(zoom_text, font_large, WHITE, BLACK, zoom_x, zoom_y)
+
+    # AF AUTO (autofocus) poniżej zoomu - AF i AUTO obok siebie
+    af_y = zoom_y + 50
+    af_auto_text = "AF AUTO"
+    af_auto_text_surface = font_large.render(af_auto_text, True, WHITE)
+    af_auto_text_width = af_auto_text_surface.get_width()
+    af_auto_x = zoom_right_edge - af_auto_text_width
+    draw_text_with_outline(af_auto_text, font_large, WHITE, BLACK, af_auto_x, af_y)
+
+    # Przerwa, następnie balans bieli
+    wb_y = af_y + 80  # Większa przerwa
+
+    # Pobierz tryb balansu bieli z ustawień
+    awb_mode = camera_settings.get("awb_mode", "auto")
+
+    if awb_mode == "auto":
+        wb_text = "P AUTO"
+    else:
+        # Mapowanie trybów AWB na temperatury kolorów
+        wb_temp_map = {
+            "incandescent": 2.8,
+            "tungsten": 3.2,
+            "fluorescent": 4.0,
+            "indoor": 3.8,
+            "daylight": 5.6,
+            "cloudy": 6.5
+        }
+        wb_temp = wb_temp_map.get(awb_mode, 5.6)
+        wb_text = f"P{wb_temp}K"
+
+    # Oblicz pozycję x aby wyrównać do prawej
+    wb_text_surface = font_large.render(wb_text, True, WHITE)
+    wb_text_width = wb_text_surface.get_width()
+    wb_x = zoom_right_edge - wb_text_width
+
+    draw_text_with_outline(wb_text, font_large, WHITE, BLACK, wb_x, wb_y)
 
 
 # ============================================================================
@@ -2505,8 +2547,8 @@ def get_battery_level():
 def draw_battery_icon():
     """Rysuj ikonę baterii z 4 segmentami"""
     # Pozycja i rozmiar baterii
-    battery_x = SCREEN_WIDTH - 100
-    battery_y = 20
+    battery_x = 30
+    battery_y = 72
     battery_width = 60
     battery_height = 28
     
@@ -2585,9 +2627,21 @@ def draw_battery_icon():
             segment_height
         )
         pygame.draw.rect(screen, WHITE, segment_rect)
-    
+
     # Wyłącz clipping
     screen.set_clip(None)
+
+    # Minuty baterii na lewo od ikony baterii
+    # Szacowany czas pracy baterii w minutach na podstawie poziomu baterii
+    # Przykład: przy 100% - 120 minut, przy 50% - 60 minut, przy 25% - 30 minut
+    estimated_minutes = int(battery_level * 1.2)  # Prosty przelicznik (100% = 120 min)
+    minutes_text = f"{estimated_minutes}min"
+
+    # Pozycja tekstu na lewo od baterii (przesunięte bardziej w lewo)
+    minutes_x = battery_x + 80
+    minutes_y = battery_y + battery_height // 2 - 15
+
+    draw_text_with_outline(minutes_text, font_large, WHITE, BLACK, minutes_x, minutes_y)
 
 
 def draw_zoom_bar():
@@ -2669,22 +2723,53 @@ def draw_recording_indicator():
 
         draw_text_with_outline(timecode_text, menu_font, WHITE, BLACK, tc_x, tc_y + 15)
     else:
-        draw_text_with_outline("STBY", font_large, GREEN, BLACK, rec_x, rec_y)
+        draw_text_with_outline("STBY", menu_font, GREEN, BLACK, rec_x, rec_y)
 
 
 def draw_menu_button():
-    """Rysuj przycisk informujący o możliwości otwarcia menu w lewym górnym rogu"""
-    button_width = 100
-    button_height = 50
+    """Rysuj przycisk P-MENU w prawym dolnym rogu"""
+    button_width = 220
+    button_height = 55
+    button_x = SCREEN_WIDTH - button_width - 20
+    button_y = SCREEN_HEIGHT - button_height - 20
+
+    # Rysuj białe tło przycisku
+    pygame.draw.rect(screen, WHITE, (button_x, button_y, button_width, button_height), border_radius=10)
+
+    # Rysuj czarną obramówkę
+    pygame.draw.rect(screen, BLACK, (button_x, button_y, button_width, button_height), 3, border_radius=10)
+
+    # Rysuj tekst na przycisku (czarny tekst na białym tle)
+    draw_text("P-MENU", font_large, BLACK, button_x + button_width // 2, button_y + button_height // 2, center=True)
+
+
+def draw_play_button():
+    """Rysuj przycisk play w lewym dolnym rogu"""
+    button_width = 220
+    button_height = 55
     button_x = 20
-    button_y = 20
+    button_y = SCREEN_HEIGHT - button_height - 20
 
-    # Rysuj tło przycisku
-    pygame.draw.rect(screen, DARK_GRAY, (button_x, button_y, button_width, button_height), border_radius=10)
-    pygame.draw.rect(screen, BLUE, (button_x, button_y, button_width, button_height), 3, border_radius=10)
+    # Rysuj białe tło przycisku
+    pygame.draw.rect(screen, WHITE, (button_x, button_y, button_width, button_height), border_radius=10)
 
-    # Rysuj tekst na przycisku
-    draw_text_with_outline("MENU", font_medium, WHITE, BLACK, button_x + button_width // 2, button_y + button_height // 2, center=True)
+    # Rysuj czarną obramówkę
+    pygame.draw.rect(screen, BLACK, (button_x, button_y, button_width, button_height), 3, border_radius=10)
+
+    # Rysuj ikonę play na przycisku
+    if playback_icon is not None:
+        # Przeskaluj obrazek do wielkości guzika (z małym marginesem)
+        icon_width = button_width - 150
+        icon_height = button_height - 10
+        scaled_icon = pygame.transform.scale(playback_icon, (icon_width, icon_height))
+
+        # Wyśrodkuj obrazek na guziku
+        icon_x = button_x + (button_width - icon_width) // 2
+        icon_y = button_y + (button_height - icon_height) // 2
+        screen.blit(scaled_icon, (icon_x, icon_y))
+    else:
+        # Fallback: rysuj tekst jeśli obrazek nie został załadowany
+        draw_text("S", menu_font, BLACK, button_x + button_width // 2, button_y + button_height // 2, center=True)
 
 
 def generate_thumbnail(video_path, max_retries=3):
@@ -2935,6 +3020,8 @@ def draw_date_overlay():
     date_font = font_size_map.get(font_size_name, font_small)
 
     margin = 20
+    # Dodatkowy offset dla pozycji bottom - na podglądzie wyświetlaj wyżej (aby nie nachodzić na przycisk P-MENU)
+    bottom_preview_offset = 80  # Przesunięcie w górę dla pozycji bottom na podglądzie
 
     if position == "top_left":
         x, y = margin, margin
@@ -2943,9 +3030,9 @@ def draw_date_overlay():
         temp_surface = date_font.render(date_text, True, date_color)
         x -= temp_surface.get_width()
     elif position == "bottom_left":
-        x, y = margin, SCREEN_HEIGHT - margin - 30
+        x, y = margin, SCREEN_HEIGHT - margin - 30 - bottom_preview_offset
     elif position == "bottom_right":
-        x, y = SCREEN_WIDTH - margin, SCREEN_HEIGHT - margin - 30
+        x, y = SCREEN_WIDTH - margin, SCREEN_HEIGHT - margin - 30 - bottom_preview_offset
         temp_surface = date_font.render(date_text, True, date_color)
         x -= temp_surface.get_width()
     else:
@@ -3028,6 +3115,24 @@ def load_fonts():
         font_small = pygame.font.Font(None, 30)
         font_tiny = pygame.font.Font(None, 24)
         menu_font = pygame.font.Font(None, 65)
+
+
+def load_images():
+    """Załaduj obrazki interfejsu"""
+    global playback_icon
+
+    try:
+        # Załaduj ikonę playback
+        playback_path = Path(__file__).parent / "playback.png"
+        if playback_path.exists():
+            playback_icon = pygame.image.load(str(playback_path))
+            print("[OK] Ikona playback załadowana")
+        else:
+            print(f"[WARN] Nie znaleziono pliku: {playback_path}")
+            playback_icon = None
+    except Exception as e:
+        print(f"[ERROR] Błąd wczytywania obrazków: {e}")
+        playback_icon = None
 
 
 # ============================================================================
@@ -3139,6 +3244,9 @@ def init_pygame():
 
     # Załaduj czcionki (korzysta z camera_settings["font_family"])
     load_fonts()
+
+    # Załaduj obrazki interfejsu
+    load_images()
 
     screen.fill(BLACK)
     pygame.display.flip()
@@ -3400,8 +3508,9 @@ def draw_main_screen(frame):
     # Ukryj elementy UI podczas nagrywania
     if not recording:
         draw_menu_button()
-        draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
-                 font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
+        draw_play_button()
+        # draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
+                #  font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
     draw_zoom_bar()
     draw_recording_indicator()
@@ -4354,10 +4463,10 @@ def cleanup(signum=None, frame=None):
     global camera, recording, running, video_capture
     print("\n[CLEANUP] Zamykanie...")
     running = False
-    
+
     if video_capture:
         video_capture.release()
-    
+
     if recording:
         stop_recording()
     if camera:
@@ -4366,7 +4475,7 @@ def cleanup(signum=None, frame=None):
             camera.close()
         except:
             pass
-    
+
     save_config()
 
     # Cleanup GPIO
@@ -4389,7 +4498,7 @@ def cleanup(signum=None, frame=None):
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, cleanup)
-    
+
     init_pygame()
     init_camera()
 
