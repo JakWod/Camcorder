@@ -132,6 +132,7 @@ menu_font = None
 SCREEN_WIDTH = 0
 SCREEN_HEIGHT = 0
 playback_icon = None  # Obrazek ikony playback
+steadyhand_icon = None  # Obrazek ikony steadyhand
 
 # Menu System
 menu_tiles = []
@@ -173,6 +174,7 @@ camera_settings = {
     "sharpness": 1.0,
     "exposure_compensation": 0.0,
     "awb_mode": "auto",
+    "iso_mode": "auto",  # ISO setting
     "show_date": False,
     "show_time": False,
     "date_position": "top_left",
@@ -195,6 +197,17 @@ DATE_SEPARATORS = ["/", " ", "-"]
 DATE_COLORS = ["yellow", "white", "red", "green", "blue", "orange"]
 DATE_FONT_SIZES = ["small", "medium", "large", "extra_large"]
 VIDEO_RESOLUTIONS = ["1080p30", "1080p60", "720p30", "720p60", "4K30"]
+
+# ISO Settings (Analogue Gain)
+ISO_MODES = ["auto", "100", "200", "400", "800", "1600"]
+ISO_TO_GAIN = {
+    "auto": None,
+    "100": 1.0,
+    "200": 2.0,
+    "400": 4.0,
+    "800": 8.0,
+    "1600": 16.0
+}
 
 # Definicje czcionek
 FONT_DEFINITIONS = {
@@ -342,7 +355,7 @@ def format_manual_date(date_str):
 
 
 def draw_zoom_indicator():
-    """Rysuj wskaźnik zoomu Z99, AF AUTO i balans bieli (zawsze widoczne, wyrównane do prawej)"""
+    """Rysuj wskaźnik zoomu Z99, AF AUTO, balans bieli, ISO i Brightness (zawsze widoczne, wyrównane do prawej)"""
     zoom_right_edge = SCREEN_WIDTH - 20  # Margines od prawej krawędzi
     zoom_y = 72  # Poniżej baterii
 
@@ -361,8 +374,21 @@ def draw_zoom_indicator():
     # Rysuj wskaźnik zoomu z białym tekstem i czarnym obramowaniem
     draw_text_with_outline(zoom_text, font_large, WHITE, BLACK, zoom_x, zoom_y)
 
-    # AF AUTO (autofocus) poniżej zoomu - AF i AUTO obok siebie
-    af_y = zoom_y + 50
+    # Ikona steadyhand pomiędzy zoom a AF
+    steadyhand_y = zoom_y + 25
+    if steadyhand_icon is not None:
+        # Skaluj ikonę - rozmiar podobny do wysokości tekstu
+        icon_height = 100  # Wysokość ikony
+        icon_aspect = steadyhand_icon.get_width() / steadyhand_icon.get_height()
+        icon_width = int(icon_height)
+        scaled_steadyhand = pygame.transform.scale(steadyhand_icon, (icon_width, icon_height))
+
+        # Wyrównaj do prawej krawędzi
+        steadyhand_x = zoom_right_edge - icon_width
+        screen.blit(scaled_steadyhand, (steadyhand_x, steadyhand_y))
+
+    # AF AUTO (autofocus) poniżej steadyhand - AF i AUTO obok siebie
+    af_y = steadyhand_y + 110  # Zmieniono z 50 na 110 aby był bezpośrednio pod ikoną
     af_auto_text = "AF AUTO"
     af_auto_text_surface = font_large.render(af_auto_text, True, WHITE)
     af_auto_text_width = af_auto_text_surface.get_width()
@@ -370,7 +396,7 @@ def draw_zoom_indicator():
     draw_text_with_outline(af_auto_text, font_large, WHITE, BLACK, af_auto_x, af_y)
 
     # Przerwa, następnie balans bieli
-    wb_y = af_y + 80  # Większa przerwa
+    wb_y = af_y + 100  # Zmieniono z 80 na 100 - większa przerwa między AF a WB
 
     # Pobierz tryb balansu bieli z ustawień
     awb_mode = camera_settings.get("awb_mode", "auto")
@@ -396,6 +422,37 @@ def draw_zoom_indicator():
     wb_x = zoom_right_edge - wb_text_width
 
     draw_text_with_outline(wb_text, font_large, WHITE, BLACK, wb_x, wb_y)
+
+    # ISO poniżej balansu bieli
+    iso_y = wb_y + 50
+
+    # Pobierz tryb ISO z ustawień
+    iso_mode = camera_settings.get("iso_mode", "auto")
+    if iso_mode == "auto":
+        iso_text = "ISO AUTO"
+    else:
+        iso_text = f"ISO {iso_mode}"
+
+    # Oblicz pozycję x aby wyrównać do prawej
+    iso_text_surface = font_large.render(iso_text, True, WHITE)
+    iso_text_width = iso_text_surface.get_width()
+    iso_x = zoom_right_edge - iso_text_width
+
+    draw_text_with_outline(iso_text, font_large, WHITE, BLACK, iso_x, iso_y)
+
+    # Brightness poniżej ISO
+    brightness_y = iso_y + 50
+
+    # Pobierz wartość brightness z ustawień
+    brightness_value = camera_settings.get("brightness", 0.0)
+    brightness_text = f"B {brightness_value:+.1f}"  # Format: BRT +0.5 lub BRT -0.3
+
+    # Oblicz pozycję x aby wyrównać do prawej
+    brightness_text_surface = font_large.render(brightness_text, True, WHITE)
+    brightness_text_width = brightness_text_surface.get_width()
+    brightness_x = zoom_right_edge - brightness_text_width
+
+    draw_text_with_outline(brightness_text, font_large, WHITE, BLACK, brightness_x, brightness_y)
 
 
 # ============================================================================
@@ -490,6 +547,7 @@ def reset_manual_settings():
     camera_settings["sharpness"] = 1.0
     camera_settings["exposure_compensation"] = 0.0
     camera_settings["awb_mode"] = "auto"
+    camera_settings["iso_mode"] = "auto"
     save_config()
     apply_camera_settings()
     print("[OK] Reset ustawień manualnych")
@@ -509,38 +567,47 @@ def apply_camera_settings():
     """Zastosuj ustawienia do kamery"""
     if not camera:
         return
-    
+
     try:
         controls = {}
-        
+
         if "brightness" in camera_settings:
             controls["Brightness"] = camera_settings["brightness"]
-        
+
         if "contrast" in camera_settings:
             controls["Contrast"] = camera_settings["contrast"]
-        
+
         if "saturation" in camera_settings:
             controls["Saturation"] = camera_settings["saturation"]
-        
+
         if "sharpness" in camera_settings:
             controls["Sharpness"] = camera_settings["sharpness"]
-        
+
         if "exposure_compensation" in camera_settings:
             controls["ExposureValue"] = camera_settings["exposure_compensation"]
-        
+
         if "awb_mode" in camera_settings:
             mode = camera_settings["awb_mode"]
             if mode == "auto":
                 controls["AwbEnable"] = True
             else:
                 controls["AwbEnable"] = False
-        
+
+        # ISO (Analogue Gain) setting
+        if "iso_mode" in camera_settings:
+            iso_mode = camera_settings["iso_mode"]
+            if iso_mode != "auto" and iso_mode in ISO_TO_GAIN:
+                gain_value = ISO_TO_GAIN[iso_mode]
+                if gain_value is not None:
+                    controls["AnalogueGain"] = gain_value
+                    print(f"[ISO] Ustawiono ISO {iso_mode} (gain: {gain_value})")
+
         if "zoom" in camera_settings:
             apply_zoom(camera_settings["zoom"])
-        
+
         camera.set_controls(controls)
         print(f"[OK] Ustawienia kamery zastosowane")
-        
+
     except Exception as e:
         print(f"[WARN] Błąd ustawiania kamery: {e}")
 
@@ -800,9 +867,16 @@ def init_menu_tiles():
             "section": "Manual Settings"
         },
         {
+            "id": "iso",
+            "label": "ISO",
+            "value": lambda: camera_settings.get("iso_mode", "auto").upper(),
+            "icon": "[CONFIG]",
+            "section": "Manual Settings"
+        },
+        {
             "id": "brightness",
             "label": "Jasność",
-            "value": lambda: f"{camera_settings.get('brightness', 0.0):.1f}",
+            "value": lambda: f"{camera_settings.get('brightness', 0.0):+.1f}",
             "icon": "[CONFIG]",
             "section": "Manual Settings"
         },
@@ -939,7 +1013,8 @@ def init_submenu(tile_id):
             {"type": "header", "text": "[CONFIG] MANUAL SETTINGS"},
             {"type": "spacer"},
             {"type": "select", "label": "White Balance", "key": "awb_mode", "options": WB_MODES},
-            {"type": "slider", "label": "Jasność", "key": "brightness", "min": -1.0, "max": 1.0, "step": 0.1},
+            {"type": "select", "label": "ISO", "key": "iso_mode", "options": ISO_MODES},
+            {"type": "slider", "label": "Jasność", "key": "brightness", "min": -2.0, "max": 2.0, "step": 0.2},
             {"type": "slider", "label": "Kontrast", "key": "contrast", "min": 0.0, "max": 2.0, "step": 0.1},
             {"type": "slider", "label": "Saturacja", "key": "saturation", "min": 0.0, "max": 2.0, "step": 0.1},
             {"type": "slider", "label": "Ostrość", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
@@ -2200,6 +2275,7 @@ def draw_selection_popup():
     setting_to_label = {
         "video_resolution": "Rozdzielczość",
         "awb_mode": "White Balance",
+        "iso_mode": "ISO",
         "date_position": "Pozycja daty",
         "date_format": "Format daty",
         "date_separator": "Separator daty",
@@ -3119,7 +3195,7 @@ def load_fonts():
 
 def load_images():
     """Załaduj obrazki interfejsu"""
-    global playback_icon
+    global playback_icon, steadyhand_icon
 
     try:
         # Załaduj ikonę playback
@@ -3130,9 +3206,19 @@ def load_images():
         else:
             print(f"[WARN] Nie znaleziono pliku: {playback_path}")
             playback_icon = None
+
+        # Załaduj ikonę steadyhand
+        steadyhand_path = Path(__file__).parent / "steadyhand.png"
+        if steadyhand_path.exists():
+            steadyhand_icon = pygame.image.load(str(steadyhand_path))
+            print("[OK] Ikona steadyhand załadowana")
+        else:
+            print(f"[WARN] Nie znaleziono pliku: {steadyhand_path}")
+            steadyhand_icon = None
     except Exception as e:
         print(f"[ERROR] Błąd wczytywania obrazków: {e}")
         playback_icon = None
+        steadyhand_icon = None
 
 
 # ============================================================================
@@ -4105,6 +4191,9 @@ def handle_ok():
                 elif tile_id == "wb":
                     open_selection_popup("awb_mode", WB_MODES)
 
+                elif tile_id == "iso":
+                    open_selection_popup("iso_mode", ISO_MODES)
+
                 elif tile_id == "date_position":
                     open_selection_popup("date_position", DATE_POSITIONS)
 
@@ -4189,6 +4278,7 @@ def handle_delete():
             "grid": ("show_grid", True),
             "font": ("font_family", "HomeVideo"),
             "wb": ("awb_mode", "auto"),
+            "iso": ("iso_mode", "auto"),
             "brightness": ("brightness", 0.0),
             "contrast": ("contrast", 1.0),
             "saturation": ("saturation", 1.0),
