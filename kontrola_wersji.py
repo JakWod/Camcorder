@@ -196,7 +196,7 @@ DATE_FORMATS = ["DD/MM/YYYY", "MM/DD/YYYY", "YYYY/MM/DD"]
 DATE_SEPARATORS = ["/", " ", "-"]
 DATE_COLORS = ["yellow", "white", "red", "green", "blue", "orange"]
 DATE_FONT_SIZES = ["small", "medium", "large", "extra_large"]
-VIDEO_RESOLUTIONS = ["1080p30", "1080p60", "720p30", "720p60", "4K30"]
+VIDEO_RESOLUTIONS = ["1080p30", "1080p50", "720p30", "720p50", "4K30"]
 
 # ISO Settings (Analogue Gain)
 ISO_MODES = ["auto", "100", "200", "400", "800", "1600"]
@@ -242,18 +242,18 @@ FONT_NAMES = list(FONT_DEFINITIONS.keys())
 # Mapowanie rozdzielczości
 RESOLUTION_MAP = {
     "1080p30": {"size": (1920, 1080), "fps": 30},
-    "1080p60": {"size": (1920, 1080), "fps": 60},
+    "1080p50": {"size": (1920, 1080), "fps": 50},
     "720p30": {"size": (1280, 720), "fps": 30},
-    "720p60": {"size": (1280, 720), "fps": 60},
+    "720p50": {"size": (1280, 720), "fps": 50},
     "4K30": {"size": (3840, 2160), "fps": 30},
 }
 
 # Bitrate dla różnych rozdzielczości (w bitach na sekundę)
 BITRATE_MAP = {
     "1080p30": 10000000,   # 10 Mbps
-    "1080p60": 15000000,   # 15 Mbps
+    "1080p50": 14000000,   # 14 Mbps
     "720p30": 6000000,     # 6 Mbps
-    "720p60": 10000000,    # 10 Mbps
+    "720p50": 9000000,     # 9 Mbps
     "4K30": 25000000,      # 25 Mbps
 }
 
@@ -511,7 +511,7 @@ def reset_to_factory():
     """Reset do ustawień fabrycznych"""
     global camera_settings
     camera_settings = {
-        "video_resolution": "1080p60",
+        "video_resolution": "1080p50",
         "white_balance": "auto",
         "brightness": 0.0,
         "contrast": 1.0,
@@ -667,7 +667,7 @@ def add_date_overlay_to_video(video_path):
             original_fps = probe_cap.get(cv2.CAP_PROP_FPS)
             probe_cap.release()
         
-        if not original_fps or original_fps <= 0 or original_fps > 120:
+        if not original_fps or original_fps <= 0 or original_fps > 50:
             original_fps = get_current_fps()
         
         print(f"[VIDEO] Używam FPS: {original_fps}")
@@ -2720,6 +2720,31 @@ def draw_battery_icon():
 
     draw_text_with_outline(minutes_text, font_large, WHITE, BLACK, minutes_x, minutes_y)
 
+    # Format nagrywania poniżej baterii
+    format_y = battery_y + 45
+
+    # Pobierz aktualną rozdzielczość
+    resolution = camera_settings.get("video_resolution", "1080p30")
+
+    # Mapowanie rozdzielczości na czytelne nazwy formatów
+    format_map = {
+        "4K30": "4K",
+        "1080p30": "FHD",
+        "1080p50": "FHD",
+        "720p30": "HD",
+        "720p50": "HD"
+    }
+
+    # Pobierz nazwę formatu i FPS
+    format_name = format_map.get(resolution, "FHD")
+    res_config = RESOLUTION_MAP.get(resolution, {"fps": 30})
+    fps_value = res_config["fps"]
+
+    # Tekst formatu i FPS (np. "FHD 30p")
+    format_text = f"{format_name} {fps_value}p"
+
+    draw_text_with_outline(format_text, font_large, WHITE, BLACK, battery_x, format_y)
+
 
 def draw_zoom_bar():
     """Rysuj pasek zoom W/T - tylko gdy aktywny"""
@@ -3477,7 +3502,7 @@ def start_video_playback(video_path):
         video_fps = video_capture.get(cv2.CAP_PROP_FPS)
         print(f"[FPS] OpenCV FPS: {video_fps}")
     
-    if video_fps <= 0 or video_fps > 120:
+    if video_fps <= 0 or video_fps > 50:
         video_fps = 30
         print(f"[WARN] FPS nieprawidłowy, użyto 30")
     
