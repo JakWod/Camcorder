@@ -378,17 +378,18 @@ def draw_zoom_indicator():
     steadyhand_y = zoom_y + 25
     if steadyhand_icon is not None:
         # Skaluj ikonę - rozmiar podobny do wysokości tekstu
-        icon_height = 100  # Wysokość ikony
-        icon_aspect = steadyhand_icon.get_width() / steadyhand_icon.get_height()
-        icon_width = int(icon_height)
+        icon_height = 90  # Wysokość ikony
+        # icon_aspect = steadyhand_icon.get_width() / steadyhand_icon.get_height()
+        icon_width = int(icon_height + 10)
         scaled_steadyhand = pygame.transform.scale(steadyhand_icon, (icon_width, icon_height))
+        scaled_steadyhand = pygame.transform.flip(scaled_steadyhand, True, False)
 
         # Wyrównaj do prawej krawędzi
         steadyhand_x = zoom_right_edge - icon_width
         screen.blit(scaled_steadyhand, (steadyhand_x, steadyhand_y))
 
     # AF AUTO (autofocus) poniżej steadyhand - AF i AUTO obok siebie
-    af_y = steadyhand_y + 110  # Zmieniono z 50 na 110 aby był bezpośrednio pod ikoną
+    af_y = steadyhand_y + 85  # Zmieniono z 50 na 110 aby był bezpośrednio pod ikoną
     af_auto_text = "AF AUTO"
     af_auto_text_surface = font_large.render(af_auto_text, True, WHITE)
     af_auto_text_width = af_auto_text_surface.get_width()
