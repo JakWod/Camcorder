@@ -2740,10 +2740,36 @@ def draw_battery_icon():
     res_config = RESOLUTION_MAP.get(resolution, {"fps": 30})
     fps_value = res_config["fps"]
 
-    # Tekst formatu i FPS (np. "FHD 30p")
-    format_text = f"{format_name} {fps_value}p"
+    # Rysuj format w białym owalu z czarnym obramowaniem
+    format_text_surface = font_large.render(format_name, True, BLACK)
+    format_text_width = format_text_surface.get_width()
+    format_text_height = format_text_surface.get_height()
 
-    draw_text_with_outline(format_text, font_large, WHITE, BLACK, battery_x, format_y)
+    # Wymiary owalu (z paddingiem)
+    oval_padding_x = 12
+    oval_padding_y = 6
+    oval_width = format_text_width + oval_padding_x * 2
+    oval_height = format_text_height + oval_padding_y * 2
+    oval_x = battery_x 
+    oval_y = format_y - oval_padding_y - 5
+
+    # Rysuj biały owal (prostokąt z zaokrąglonymi rogami)
+    pygame.draw.rect(screen, WHITE, (oval_x, oval_y, oval_width, oval_height), border_radius=int(oval_height // 2))
+
+    # Rysuj czarne obramowanie owalu
+    pygame.draw.rect(screen, BLACK, (oval_x, oval_y, oval_width, oval_height), 3, border_radius=int(oval_height // 2))
+
+    # Rysuj czarny tekst formatu na białym tle (bez outline)
+    format_text_x = oval_x + oval_padding_x + 5
+    format_text_y = format_y
+    draw_text(format_name, font_large, BLACK, format_text_x, format_text_y)
+
+    # FPS po prawej stronie owalu (z białym tekstem i czarnym outline)
+    fps_text = f"{fps_value}FPS"
+    fps_x = oval_x + oval_width + 10  # 10px odstępu od owalu
+    fps_y = format_y
+
+    draw_text_with_outline(fps_text, font_large, WHITE, BLACK, fps_x, fps_y)
 
 
 def draw_zoom_bar():
