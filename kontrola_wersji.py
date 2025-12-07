@@ -135,6 +135,7 @@ SCREEN_HEIGHT = 0
 playback_icon = None  # Obrazek ikony playback
 steadyhand_icon = None  # Obrazek ikony steadyhand
 sd_icon = None  # Obrazek ikony karty SD
+brightness_icon = None  # Obrazek ikony brightness
 
 # Menu System
 menu_tiles = []
@@ -418,7 +419,7 @@ def draw_recording_time_remaining():
 
     # === Rysuj czas pozostały (z czarnym outline) ===
     time_x = start_x + oval_width + spacing
-    draw_text_with_outline(time_text, menu_font, WHITE, BLACK, time_x, top_margin)
+    draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x + 10, top_margin)
 
 
 def draw_zoom_indicator():
@@ -516,14 +517,36 @@ def draw_zoom_indicator():
 
     # Pobierz wartość brightness z ustawień
     brightness_value = camera_settings.get("brightness", 0.0)
-    brightness_text = f"B {brightness_value:+.1f}"
+    brightness_value_text = f"{brightness_value:+.1f}"
 
-    # Oblicz pozycję x aby wyrównać do prawej
-    brightness_text_surface = font_large.render(brightness_text, True, WHITE)
-    brightness_text_width = brightness_text_surface.get_width()
-    brightness_x = zoom_right_edge - brightness_text_width
+    # Wyrenderuj tekst wartości
+    brightness_value_surface = font_large.render(brightness_value_text, True, WHITE)
+    brightness_value_width = brightness_value_surface.get_width()
 
-    draw_text_with_outline(brightness_text, font_large, WHITE, BLACK, brightness_x, brightness_y)
+    if brightness_icon is not None:
+        # Skaluj ikonę - rozmiar jak tekst
+        icon_height = 50  # Wysokość ikony dostosowana do tekstu
+        icon_width = int(icon_height * (brightness_icon.get_width() / brightness_icon.get_height()))
+        scaled_brightness = pygame.transform.scale(brightness_icon, (icon_width + 10, icon_height))
+
+        # Oblicz całkowitą szerokość (ikona + odstęp + wartość)
+        total_width = icon_width + 5 + brightness_value_width
+
+        # Pozycja początkowa - wyrównanie do prawej
+        start_x = zoom_right_edge - total_width 
+
+        # Rysuj ikonę
+        screen.blit(scaled_brightness, (start_x - 20, brightness_y - 10))
+
+        # Rysuj wartość obok ikony
+        draw_text_with_outline(brightness_value_text, font_large, WHITE, BLACK, start_x + icon_width + 5, brightness_y)
+    else:
+        # Fallback - jeśli ikona się nie załadowała, użyj tekstu
+        brightness_text = f"B {brightness_value:+.1f}"
+        brightness_text_surface = font_large.render(brightness_text, True, WHITE)
+        brightness_text_width = brightness_text_surface.get_width()
+        brightness_x = zoom_right_edge - brightness_text_width
+        draw_text_with_outline(brightness_text, font_large, WHITE, BLACK, brightness_x, brightness_y)
 
 
 # ============================================================================
@@ -2699,7 +2722,7 @@ def draw_battery_icon():
     right_margin = 20
     bottom_margin = 80  # Nad dolną krawędzią, zostawiamy miejsce na czas
     battery_x = SCREEN_WIDTH - right_margin - battery_width - 5  # Przesunięte 5px w lewo
-    battery_y = SCREEN_HEIGHT - bottom_margin - battery_height
+    battery_y = SCREEN_HEIGHT - bottom_margin - battery_height - 10
 
     # Czarne tło pod baterią (outline)
     outline_padding = 2
@@ -2791,7 +2814,7 @@ def draw_battery_icon():
     time_text_surface = font_large.render(time_text, True, WHITE)
     time_text_width = time_text_surface.get_width()
     time_x = SCREEN_WIDTH - right_margin - time_text_width
-    time_y = battery_y + battery_height + 10
+    time_y = battery_y + battery_height + 20
 
     draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x, time_y)
 
@@ -2899,7 +2922,7 @@ def draw_zoom_bar():
 def draw_recording_indicator():
     """Rysuj wskaźnik nagrywania lub STBY w prawym górnym rogu, poniżej czasu nagrywania"""
     right_margin = 20
-    rec_y = 70  # Poniżej czasu nagrywania
+    rec_y = 75  # Poniżej czasu nagrywania
 
     if recording and recording_start_time:
         elapsed_time = time.time() - recording_start_time
@@ -2951,7 +2974,7 @@ def draw_sd_indicator():
         return
 
     right_margin = 10
-    rec_y = 70  # Pozycja REC/STBY
+    rec_y = 75  # Pozycja REC/STBY
     sd_y = rec_y + 30  # 30px poniżej REC/STBY
 
     # NAJPIERW spixelizuj oryginalną ikonę
@@ -3337,7 +3360,7 @@ def pixelize_image(image, pixel_size=4):
 
 def load_images():
     """Załaduj obrazki interfejsu"""
-    global playback_icon, steadyhand_icon, sd_icon
+    global playback_icon, steadyhand_icon, sd_icon, brightness_icon
 
     try:
         # Załaduj ikonę playback
@@ -3366,11 +3389,21 @@ def load_images():
         else:
             print(f"[WARN] Nie znaleziono pliku: {sd_path}")
             sd_icon = None
+
+        # Załaduj ikonę brightness
+        brightness_path = Path(__file__).parent / "bright.png"
+        if brightness_path.exists():
+            brightness_icon = pygame.image.load(str(brightness_path))
+            print("[OK] Ikona brightness załadowana")
+        else:
+            print(f"[WARN] Nie znaleziono pliku: {brightness_path}")
+            brightness_icon = None
     except Exception as e:
         print(f"[ERROR] Błąd wczytywania obrazków: {e}")
         playback_icon = None
         steadyhand_icon = None
         sd_icon = None
+        brightness_icon = None
 
 
 # ============================================================================
@@ -3758,10 +3791,24 @@ def draw_main_screen(frame):
 def draw_videos_screen():
     """Ekran listy filmów - układ siatki z miniaturkami"""
     global videos_scroll_offset
-    screen.fill(BLACK)
+
+    # Gradient tła jak w menu
+    blue_gray_top = (70, 90, 110)
+    gradient_height = SCREEN_HEIGHT
+    start_color = BLACK
+    end_color = blue_gray_top
+
+    for y in range(gradient_height):
+        ratio = y / gradient_height
+        r = int(start_color[0] * (1 - ratio) + end_color[0] * ratio)
+        g = int(start_color[1] * (1 - ratio) + end_color[1] * ratio)
+        b = int(start_color[2] * (1 - ratio) + end_color[2] * ratio)
+        color = (r, g, b)
+        pygame.draw.line(screen, color, (0, y), (SCREEN_WIDTH, y))
 
     header_height = 100
-    pygame.draw.rect(screen, DARK_GRAY, (0, 0, SCREEN_WIDTH, header_height))
+    # Nagłówek - bez tła, gradient będzie widoczny
+    # pygame.draw.rect(screen, DARK_GRAY, (0, 0, SCREEN_WIDTH, header_height))
 
     # Nagłówek z wskaźnikiem trybu multi-select
     if multi_select_mode:
@@ -3871,10 +3918,44 @@ def draw_videos_screen():
             counter_text = f"{selected_index + 1}/{len(videos)}"
         draw_text(counter_text, font_small, WHITE, SCREEN_WIDTH // 2, header_height + 10, center=True, bg_color=BLUE, padding=10)
 
-    # Panel dolny
+    # Panel dolny - styl jak w menu
     panel_height = 80
     panel_y = SCREEN_HEIGHT - panel_height
-    pygame.draw.rect(screen, DARK_GRAY, (0, panel_y, SCREEN_WIDTH, panel_height))
+
+    # Ciemniejszy odcień niebiesko-szarego
+    dark_blue_gray = (40, 50, 60)
+    pygame.draw.rect(screen, dark_blue_gray, (0, panel_y, SCREEN_WIDTH, panel_height))
+
+    # Dodaj liniowy gradient - co 15 pikseli jasność +2, grubość linii -1 (start: 10px)
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1
+
+    current_y = panel_y + line_spacing
+    line_index = 0
+
+    while current_y < panel_y + panel_height:
+        cyclic_index = line_index % cycle_length
+        brightness_boost = cyclic_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+        line_thickness = initial_line_thickness - cyclic_index
+
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (10, current_y + i),
+                               (SCREEN_WIDTH - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
+    # Ramka panelu
+    pygame.draw.rect(screen, LIGHT_BLUE, (0, panel_y, SCREEN_WIDTH, panel_height), 3)
 
     # Instrukcje zależne od trybu
     if multi_select_mode:
@@ -4014,48 +4095,48 @@ def draw_video_info_dialog():
 def draw_playing_screen():
     """Ekran odtwarzania"""
     global video_current_frame, video_last_frame_time, video_last_surface
-    
+
     if not video_capture:
         screen.fill(BLACK)
         draw_text("[ERROR] Blad odtwarzania", font_large, RED, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
         return
-    
+
     if not video_paused:
         current_time = time.time()
         frame_interval = 1.0 / video_fps
-        
+
         if current_time - video_last_frame_time >= frame_interval:
             ret, frame = video_capture.read()
-            
+
             if ret and frame is not None:
                 try:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    
+
                     video_h, video_w = frame.shape[:2]
                     aspect = video_w / video_h
                     screen_aspect = SCREEN_WIDTH / SCREEN_HEIGHT
-                    
+
                     if aspect > screen_aspect:
                         new_w = SCREEN_WIDTH
                         new_h = int(SCREEN_WIDTH / aspect)
                     else:
                         new_h = SCREEN_HEIGHT
                         new_w = int(SCREEN_HEIGHT * aspect)
-                    
+
                     frame_resized = cv2.resize(frame_rgb, (new_w, new_h))
                     frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
-                    
+
                     video_last_surface = (frame_surface, new_w, new_h)
-                    
+
                 except Exception as e:
                     print(f"[WARN] Błąd klatki: {e}")
-                
+
                 video_current_frame += 1
                 video_last_frame_time = current_time
             else:
                 stop_video_playback()
                 return
-    
+
     screen.fill(BLACK)
     if video_last_surface:
         try:
@@ -4065,14 +4146,45 @@ def draw_playing_screen():
             screen.blit(frame_surface, (x_offset, y_offset))
         except:
             pass
-    
+
+    # Panel dolny - styl jak w menu
     panel_height = 150
     panel_y = SCREEN_HEIGHT - panel_height
-    
-    panel = pygame.Surface((SCREEN_WIDTH, panel_height))
-    panel.set_alpha(200)
-    panel.fill(BLACK)
-    screen.blit(panel, (0, panel_y))
+
+    # Ciemniejszy odcień niebiesko-szarego
+    dark_blue_gray = (40, 50, 60)
+    pygame.draw.rect(screen, dark_blue_gray, (0, panel_y, SCREEN_WIDTH, panel_height))
+
+    # Dodaj liniowy gradient - co 15 pikseli jasność +2, grubość linii -1 (start: 10px)
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1
+
+    current_y = panel_y + line_spacing
+    line_index = 0
+
+    while current_y < panel_y + panel_height:
+        cyclic_index = line_index % cycle_length
+        brightness_boost = cyclic_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+        line_thickness = initial_line_thickness - cyclic_index
+
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (10, current_y + i),
+                               (SCREEN_WIDTH - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
+    # Ramka panelu
+    pygame.draw.rect(screen, LIGHT_BLUE, (0, panel_y, SCREEN_WIDTH, panel_height), 3)
     
     if video_path_playing:
         name = video_path_playing.name
