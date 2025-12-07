@@ -127,12 +127,14 @@ multi_select_mode = False  # Tryb zaznaczania wielu filmów
 font_large = None
 font_medium = None
 font_small = None
+font_mediumXL = None
 font_tiny = None
 menu_font = None
 SCREEN_WIDTH = 0
 SCREEN_HEIGHT = 0
 playback_icon = None  # Obrazek ikony playback
 steadyhand_icon = None  # Obrazek ikony steadyhand
+sd_icon = None  # Obrazek ikony karty SD
 
 # Menu System
 menu_tiles = []
@@ -309,7 +311,7 @@ def get_recording_time_estimate():
         hours = int(estimated_seconds // 3600)
         minutes = int((estimated_seconds % 3600) // 60)
         
-        return f"{hours:02d}h {minutes:02d}m"
+        return f"{hours:02d}h{minutes:02d}m"
     except:
         return "-- : --"
 
@@ -354,10 +356,79 @@ def format_manual_date(date_str):
         return f"{year}{separator}{month}{separator}{day}"
 
 
+def draw_recording_time_remaining():
+    """Rysuj format (w owalu), FPS i czas pozostały do nagrywania w prawym górnym rogu"""
+    right_margin = 20
+    top_margin = 20
+
+    # Pobierz szacowany czas nagrywania
+    time_remaining = get_recording_time_estimate()
+
+    # Pobierz aktualną rozdzielczość
+    resolution = camera_settings.get("video_resolution", "1080p30")
+
+    # Mapowanie rozdzielczości na czytelne nazwy formatów
+    format_map = {
+        "4K30": "4K",
+        "1080p30": "FHD",
+        "1080p50": "FHD",
+        "720p30": "HD",
+        "720p50": "HD"
+    }
+    format_name = format_map.get(resolution, "FHD")
+
+    # Tekst formatu dla obliczenia rozmiaru owalu - UŻYWAMY NOWEJ CZCIONKI font_mediumXL
+    format_text_surface = font_mediumXL.render(format_name, True, BLACK)
+    format_text_width = format_text_surface.get_width()
+    format_text_height = format_text_surface.get_height()
+
+    # Wymiary owalu (z paddingiem)
+    oval_padding_x = 18
+    oval_padding_y = 2
+    oval_width = format_text_width + oval_padding_x * 2
+    oval_height = format_text_height + oval_padding_y * 2
+
+    # Tekst czasu z nawiasami
+    time_text = f"[{time_remaining}]"
+    time_text_surface = menu_font.render(time_text, True, WHITE)
+    time_text_width = time_text_surface.get_width()
+
+    # Oblicz całkowitą szerokość (owal + spacja + [czas])
+    spacing = 10
+    total_width = oval_width + spacing + time_text_width
+
+    # Pozycja początkowa wyrównana do prawej
+    start_x = SCREEN_WIDTH - right_margin - total_width
+
+    # === Rysuj owal z formatem ===
+    # Przesunięcie formatu o 30px w lewo
+    oval_x = start_x - 30
+    oval_y = top_margin - oval_padding_y - 5
+
+    # Rysuj biały owal (prostokąt z zaokrąglonymi rogami)
+    pygame.draw.rect(screen, WHITE, (oval_x, oval_y, oval_width, oval_height), border_radius=int(oval_height // 2))
+
+    # Rysuj czarne obramowanie owalu
+    pygame.draw.rect(screen, BLACK, (oval_x, oval_y, oval_width, oval_height), 2, border_radius=int(oval_height // 2))
+
+    # Rysuj czarny tekst formatu na białym tle (bez outline) - UŻYWAMY NOWEJ CZCIONKI
+    format_text_x = oval_x + oval_padding_x + 5
+    format_text_y = top_margin
+    draw_text(format_name, font_mediumXL, BLACK, format_text_x, format_text_y)
+
+    # === Rysuj czas pozostały (z czarnym outline) ===
+    time_x = start_x + oval_width + spacing
+    draw_text_with_outline(time_text, menu_font, WHITE, BLACK, time_x, top_margin)
+
+
 def draw_zoom_indicator():
-    """Rysuj wskaźnik zoomu Z99, AF AUTO, balans bieli, ISO i Brightness (zawsze widoczne, wyrównane do prawej)"""
+    """Rysuj wskaźnik zoomu Z99, steadyhand, AF AUTO, balans bieli, ISO i Brightness (zawsze widoczne, wyrównane do prawej)"""
+    # Ukryj wskaźniki podczas nagrywania
+    if recording:
+        return
+
     zoom_right_edge = SCREEN_WIDTH - 20  # Margines od prawej krawędzi
-    zoom_y = 72  # Poniżej baterii
+    zoom_y = 220  # Pod formatem i FPS
 
     # Pobierz poziom zoomu (0.0 - 1.0) i przelicz na procenty (0-99)
     zoom_level = camera_settings.get("zoom", 0.0)
@@ -374,12 +445,11 @@ def draw_zoom_indicator():
     # Rysuj wskaźnik zoomu z białym tekstem i czarnym obramowaniem
     draw_text_with_outline(zoom_text, font_large, WHITE, BLACK, zoom_x, zoom_y)
 
-    # Ikona steadyhand pomiędzy zoom a AF
+    # Ikona steadyhand poniżej zoom
     steadyhand_y = zoom_y + 25
     if steadyhand_icon is not None:
-        # Skaluj ikonę - rozmiar podobny do wysokości tekstu
+        # Skaluj ikonę - rozmiar jak wcześniej
         icon_height = 90  # Wysokość ikony
-        # icon_aspect = steadyhand_icon.get_width() / steadyhand_icon.get_height()
         icon_width = int(icon_height + 10)
         scaled_steadyhand = pygame.transform.scale(steadyhand_icon, (icon_width, icon_height))
         scaled_steadyhand = pygame.transform.flip(scaled_steadyhand, True, False)
@@ -388,16 +458,16 @@ def draw_zoom_indicator():
         steadyhand_x = zoom_right_edge - icon_width
         screen.blit(scaled_steadyhand, (steadyhand_x, steadyhand_y))
 
-    # AF AUTO (autofocus) poniżej steadyhand - AF i AUTO obok siebie
-    af_y = steadyhand_y + 85  # Zmieniono z 50 na 110 aby był bezpośrednio pod ikoną
+    # AF AUTO (autofocus) poniżej steadyhand
+    af_y = steadyhand_y + 85
     af_auto_text = "AF AUTO"
     af_auto_text_surface = font_large.render(af_auto_text, True, WHITE)
     af_auto_text_width = af_auto_text_surface.get_width()
     af_auto_x = zoom_right_edge - af_auto_text_width
     draw_text_with_outline(af_auto_text, font_large, WHITE, BLACK, af_auto_x, af_y)
 
-    # Przerwa, następnie balans bieli
-    wb_y = af_y + 100  # Zmieniono z 80 na 100 - większa przerwa między AF a WB
+    # Przerwa po AF, następnie balans bieli
+    wb_y = af_y + 75
 
     # Pobierz tryb balansu bieli z ustawień
     awb_mode = camera_settings.get("awb_mode", "auto")
@@ -424,8 +494,8 @@ def draw_zoom_indicator():
 
     draw_text_with_outline(wb_text, font_large, WHITE, BLACK, wb_x, wb_y)
 
-    # ISO poniżej balansu bieli
-    iso_y = wb_y + 50
+    # ISO poniżej white balance - DODATKOWE 5px przerwy
+    iso_y = wb_y + 55
 
     # Pobierz tryb ISO z ustawień
     iso_mode = camera_settings.get("iso_mode", "auto")
@@ -441,12 +511,12 @@ def draw_zoom_indicator():
 
     draw_text_with_outline(iso_text, font_large, WHITE, BLACK, iso_x, iso_y)
 
-    # Brightness poniżej ISO
-    brightness_y = iso_y + 50
+    # Brightness poniżej ISO - DODATKOWE 5px przerwy
+    brightness_y = iso_y + 55
 
     # Pobierz wartość brightness z ustawień
     brightness_value = camera_settings.get("brightness", 0.0)
-    brightness_text = f"B {brightness_value:+.1f}"  # Format: BRT +0.5 lub BRT -0.3
+    brightness_text = f"B {brightness_value:+.1f}"
 
     # Oblicz pozycję x aby wyrównać do prawej
     brightness_text_surface = font_large.render(brightness_text, True, WHITE)
@@ -2622,46 +2692,48 @@ def get_battery_level():
 
 
 def draw_battery_icon():
-    """Rysuj ikonę baterii z 4 segmentami"""
-    # Pozycja i rozmiar baterii
-    battery_x = 30
-    battery_y = 72
-    battery_width = 60
-    battery_height = 28
-    
+    """Rysuj ikonę baterii z 4 segmentami w prawym dolnym rogu (biała, większa, zwrócona w lewo)"""
+    # Pozycja i rozmiar baterii - prawy dolny róg - ZWIĘKSZONE ROZMIARY
+    battery_width = 70  # Zwiększone z 60
+    battery_height = 33  # Zwiększone z 28
+    right_margin = 20
+    bottom_margin = 80  # Nad dolną krawędzią, zostawiamy miejsce na czas
+    battery_x = SCREEN_WIDTH - right_margin - battery_width - 5  # Przesunięte 5px w lewo
+    battery_y = SCREEN_HEIGHT - bottom_margin - battery_height
+
     # Czarne tło pod baterią (outline)
     outline_padding = 2
     pygame.draw.rect(screen, BLACK,
                      (battery_x - outline_padding, battery_y - outline_padding,
                       battery_width + outline_padding * 2, battery_height + outline_padding * 2),
-                     border_radius=4)
-    
-    # Główna ramka baterii (biała)
+                     border_radius=5)
+
+    # Główna ramka baterii (BIAŁA zamiast zielonej)
     pygame.draw.rect(screen, WHITE,
                      (battery_x, battery_y, battery_width, battery_height),
-                     3, border_radius=4)
-    
-    # Końcówka baterii (po lewej)
-    tip_width = 6
-    tip_height = 12
-    tip_x = battery_x - tip_width
+                     3, border_radius=5)
+
+    # Końcówka baterii (PO LEWEJ - zwrócona w lewo)
+    tip_width = 8  # Zwiększone z 6
+    tip_height = 16  # Zwiększone z 12
+    tip_x = battery_x - tip_width  # Po lewej stronie
     tip_y = battery_y + (battery_height - tip_height) // 2
-    
+
     # Czarne tło pod końcówką
     pygame.draw.rect(screen, BLACK,
                      (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
-    
+
     # Biała końcówka
     pygame.draw.rect(screen, WHITE,
                      (tip_x, tip_y, tip_width, tip_height))
-    
+
     # Ustawienia segmentów
-    segment_width = 10
-    segment_height = battery_height - 8  # Margines 4px góra i dół
-    segment_spacing = 3
-    segments_start_x = battery_x + battery_width - 6 - segment_width  # Margines od prawej krawędzi
-    segment_y = battery_y + 4  # Margines od góry
-    
+    segment_width = 14  # Zwiększone z 10
+    segment_height = battery_height - 10  # Margines 5px góra i dół
+    segment_spacing = 4  # Zwiększone z 3
+    segments_start_x = battery_x + 8  # Margines od lewej krawędzi
+    segment_y = battery_y + 5  # Margines od góry
+
     # Pobierz poziom baterii i oblicz ile segmentów pokazać
     battery_level = get_battery_level()
     if battery_level >= 75:
@@ -2672,7 +2744,7 @@ def draw_battery_icon():
         segments_to_draw = 2
     else:
         segments_to_draw = 1
-    
+
     # Ustaw clipping na wewnętrzną część baterii (żeby segmenty nie wychodziły poza ramkę)
     clip_margin = 3
     clip_rect = pygame.Rect(
@@ -2682,11 +2754,11 @@ def draw_battery_icon():
         battery_height - clip_margin * 2
     )
     screen.set_clip(clip_rect)
-    
-    # Rysuj segmenty
+
+    # Rysuj segmenty (od lewej do prawej)
     for i in range(segments_to_draw):
-        segment_x = segments_start_x - i * (segment_width + segment_spacing)
-        
+        segment_x = segments_start_x + i * (segment_width + segment_spacing)
+
         # Czarne tło pod segmentem (outline)
         outline_rect = pygame.Rect(
             segment_x - 1,
@@ -2695,8 +2767,8 @@ def draw_battery_icon():
             segment_height + 2
         )
         pygame.draw.rect(screen, BLACK, outline_rect)
-        
-        # Biały segment
+
+        # Biały segment (zamiast zielonego)
         segment_rect = pygame.Rect(
             segment_x,
             segment_y,
@@ -2708,20 +2780,26 @@ def draw_battery_icon():
     # Wyłącz clipping
     screen.set_clip(None)
 
-    # Minuty baterii na lewo od ikony baterii
+    # Czas baterii poniżej ikony baterii - FORMAT hh:mm
     # Szacowany czas pracy baterii w minutach na podstawie poziomu baterii
-    # Przykład: przy 100% - 120 minut, przy 50% - 60 minut, przy 25% - 30 minut
     estimated_minutes = int(battery_level * 1.2)  # Prosty przelicznik (100% = 120 min)
-    minutes_text = f"{estimated_minutes}min"
+    hours = estimated_minutes // 60
+    minutes = estimated_minutes % 60
+    time_text = f"{hours:02d}:{minutes:02d}"
 
-    # Pozycja tekstu na lewo od baterii (przesunięte bardziej w lewo)
-    minutes_x = battery_x + 80
-    minutes_y = battery_y + battery_height // 2 - 15
+    # Pozycja tekstu poniżej baterii, wyrównane do prawej
+    time_text_surface = font_large.render(time_text, True, WHITE)
+    time_text_width = time_text_surface.get_width()
+    time_x = SCREEN_WIDTH - right_margin - time_text_width
+    time_y = battery_y + battery_height + 10
 
-    draw_text_with_outline(minutes_text, font_large, WHITE, BLACK, minutes_x, minutes_y)
+    draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x, time_y)
 
-    # Format nagrywania poniżej baterii
-    format_y = battery_y + 45
+
+def draw_format_fps():
+    """Rysuj informacje o formacie i FPS w prawym górnym rogu, pod REC/STBY"""
+    right_margin = 20
+    format_y = 120  # Poniżej REC/STBY
 
     # Pobierz aktualną rozdzielczość
     resolution = camera_settings.get("video_resolution", "1080p30")
@@ -2750,7 +2828,15 @@ def draw_battery_icon():
     oval_padding_y = 6
     oval_width = format_text_width + oval_padding_x * 2
     oval_height = format_text_height + oval_padding_y * 2
-    oval_x = battery_x 
+
+    # FPS po prawej stronie (obliczamy najpierw żeby znać całkowitą szerokość)
+    fps_text = f"{fps_value}FPS"
+    fps_text_surface = font_large.render(fps_text, True, WHITE)
+    fps_text_width = fps_text_surface.get_width()
+
+    # Wyrównaj do prawej krawędzi
+    fps_x = SCREEN_WIDTH - right_margin - fps_text_width
+    oval_x = fps_x - oval_width - 10  # 10px odstępu między owalem a FPS
     oval_y = format_y - oval_padding_y - 5
 
     # Rysuj biały owal (prostokąt z zaokrąglonymi rogami)
@@ -2764,12 +2850,8 @@ def draw_battery_icon():
     format_text_y = format_y
     draw_text(format_name, font_large, BLACK, format_text_x, format_text_y)
 
-    # FPS po prawej stronie owalu (z białym tekstem i czarnym outline)
-    fps_text = f"{fps_value}FPS"
-    fps_x = oval_x + oval_width + 10  # 10px odstępu od owalu
-    fps_y = format_y
-
-    draw_text_with_outline(fps_text, font_large, WHITE, BLACK, fps_x, fps_y)
+    # Rysuj FPS (z białym tekstem i czarnym outline)
+    draw_text_with_outline(fps_text, font_large, WHITE, BLACK, fps_x, format_y)
 
 
 def draw_zoom_bar():
@@ -2815,9 +2897,9 @@ def draw_zoom_bar():
 
 
 def draw_recording_indicator():
-    """Rysuj wskaźnik nagrywania lub STBY"""
-    rec_x = 585
-    rec_y = 30
+    """Rysuj wskaźnik nagrywania lub STBY w prawym górnym rogu, poniżej czasu nagrywania"""
+    right_margin = 20
+    rec_y = 70  # Poniżej czasu nagrywania
 
     if recording and recording_start_time:
         elapsed_time = time.time() - recording_start_time
@@ -2825,54 +2907,70 @@ def draw_recording_indicator():
         minutes = int((elapsed_time % 3600) // 60)
         seconds = int(elapsed_time % 60)
 
-        # Oblicz klatki na podstawie FPS
-        frames = int((elapsed_time % 1) * current_recording_fps) if current_recording_fps else 0
+        # Timecode w formacie HH:MM:SS (bez klatek)
+        timecode_text = f"TC {hours:02d}:{minutes:02d}:{seconds:02d}"
 
-        # Timecode w formacie HH:MM:SS:FF
-        timecode_text = f"TC {hours:02d}:{minutes:02d}:{seconds:02d}:{frames:02d}"
-
-        if int(pygame.time.get_ticks() / 500) % 2:
-            pygame.draw.circle(screen, RED, (rec_x + 10, rec_y + 15), 8)
-
-        # Rysuj napis REC
-        draw_text_with_outline("REC", menu_font, RED, BLACK, rec_x + 30, rec_y)
-
-        # Oblicz szerokość napisu REC aby wyśrodkować timecode
+        # Oblicz szerokość napisu REC
         rec_text_surface = menu_font.render("REC", True, RED)
         rec_text_width = rec_text_surface.get_width()
+
+        # Pozycja REC wyrównana do prawej
+        rec_x = SCREEN_WIDTH - right_margin - rec_text_width
+
+        # Migająca kropka
+        if int(pygame.time.get_ticks() / 500) % 2:
+            pygame.draw.circle(screen, RED, (rec_x - 15, rec_y + 12), 8)
+
+        # Rysuj napis REC
+        draw_text_with_outline("REC", menu_font, RED, BLACK, rec_x, rec_y)
 
         # Oblicz szerokość timecode
         tc_text_surface = menu_font.render(timecode_text, True, WHITE)
         tc_text_width = tc_text_surface.get_width()
 
-        # Wyśrodkuj timecode pod napisem REC
-        tc_x = rec_x + 30 + (rec_text_width - tc_text_width) // 2
-        tc_y = rec_y + 35  # 35 pikseli poniżej napisu REC
+        # TC na lewo od REC
+        tc_x = rec_x - tc_text_width - 30  # 30px odstępu od REC
 
-        draw_text_with_outline(timecode_text, menu_font, WHITE, BLACK, tc_x, tc_y + 15)
+        draw_text_with_outline(timecode_text, menu_font, WHITE, BLACK, tc_x, rec_y)
     else:
-        draw_text_with_outline("STBY", menu_font, GREEN, BLACK, rec_x, rec_y)
+        # STBY wyrównane do prawej
+        stby_text_surface = menu_font.render("STBY", True, GREEN)
+        stby_text_width = stby_text_surface.get_width()
+        stby_x = SCREEN_WIDTH - right_margin - stby_text_width
+
+        draw_text_with_outline("STBY", menu_font, GREEN, BLACK, stby_x, rec_y)
+
+
+def draw_sd_indicator():
+    """Rysuj spixelizowaną ikonę karty SD poniżej REC/STBY"""
+    # Ukryj ikonę SD podczas nagrywania
+    if recording:
+        return
+
+    if sd_icon is None:
+        return
+
+    right_margin = 10
+    rec_y = 70  # Pozycja REC/STBY
+    sd_y = rec_y + 30  # 30px poniżej REC/STBY
+
+    # NAJPIERW spixelizuj oryginalną ikonę
+    pixelized_icon = pixelize_image(sd_icon, pixel_size=4)
+
+    # POTEM przeskaluj spixelizowaną ikonę do żądanego rozmiaru
+    scaled_size = 90
+    final_icon = pygame.transform.scale(sd_icon, (scaled_size + 20, scaled_size))
+
+    # Wyrównaj do prawej krawędzi
+    sd_width = final_icon.get_width()
+    sd_x = SCREEN_WIDTH - right_margin - sd_width
+
+    # Rysuj ikonę
+    screen.blit(final_icon, (sd_x, sd_y))
 
 
 def draw_menu_button():
-    """Rysuj przycisk P-MENU w prawym dolnym rogu"""
-    button_width = 220
-    button_height = 55
-    button_x = SCREEN_WIDTH - button_width - 20
-    button_y = SCREEN_HEIGHT - button_height - 20
-
-    # Rysuj białe tło przycisku
-    pygame.draw.rect(screen, WHITE, (button_x, button_y, button_width, button_height), border_radius=10)
-
-    # Rysuj czarną obramówkę
-    pygame.draw.rect(screen, BLACK, (button_x, button_y, button_width, button_height), 3, border_radius=10)
-
-    # Rysuj tekst na przycisku (czarny tekst na białym tle)
-    draw_text("P-MENU", font_large, BLACK, button_x + button_width // 2, button_y + button_height // 2, center=True)
-
-
-def draw_play_button():
-    """Rysuj przycisk play w lewym dolnym rogu"""
+    """Rysuj przycisk P-MENU w lewym dolnym rogu"""
     button_width = 220
     button_height = 55
     button_x = 20
@@ -2884,20 +2982,8 @@ def draw_play_button():
     # Rysuj czarną obramówkę
     pygame.draw.rect(screen, BLACK, (button_x, button_y, button_width, button_height), 3, border_radius=10)
 
-    # Rysuj ikonę play na przycisku
-    if playback_icon is not None:
-        # Przeskaluj obrazek do wielkości guzika (z małym marginesem)
-        icon_width = button_width - 150
-        icon_height = button_height - 10
-        scaled_icon = pygame.transform.scale(playback_icon, (icon_width, icon_height))
-
-        # Wyśrodkuj obrazek na guziku
-        icon_x = button_x + (button_width - icon_width) // 2
-        icon_y = button_y + (button_height - icon_height) // 2
-        screen.blit(scaled_icon, (icon_x, icon_y))
-    else:
-        # Fallback: rysuj tekst jeśli obrazek nie został załadowany
-        draw_text("S", menu_font, BLACK, button_x + button_width // 2, button_y + button_height // 2, center=True)
+    # Rysuj tekst na przycisku (czarny tekst na białym tle)
+    draw_text("P-MENU", font_large, BLACK, button_x + button_width // 2, button_y + button_height // 2, center=True)
 
 
 def generate_thumbnail(video_path, max_retries=3):
@@ -3114,12 +3200,11 @@ def get_display_date():
 
 
 def draw_date_overlay():
-    """Rysuj overlay daty na podglądzie"""
+    """Rysuj overlay daty na podglądzie - ZAWSZE po prawej od przycisku P-MENU"""
     if not camera_settings.get("show_date", False):
         return
 
     date_text = get_display_date()
-    position = camera_settings.get("date_position", "top_left")
 
     # Mapowanie nazw kolorów na wartości RGB
     color_map = {
@@ -3135,36 +3220,18 @@ def draw_date_overlay():
     color_name = camera_settings.get("date_color", "yellow")
     date_color = color_map.get(color_name, YELLOW)
 
-    # Mapowanie rozmiarów czcionek
-    font_size_map = {
-        "small": font_tiny,
-        "medium": font_small,
-        "large": font_medium,
-        "extra_large": font_large
-    }
+    # NA PODGLĄDZIE ZAWSZE UŻYWAMY EXTRA_LARGE (niezależnie od ustawienia)
+    date_font = font_large
 
-    # Pobierz rozmiar czcionki z ustawień
-    font_size_name = camera_settings.get("date_font_size", "medium")
-    date_font = font_size_map.get(font_size_name, font_small)
+    # POZYCJA: Po prawej od przycisku P-MENU w lewym dolnym rogu
+    # Przycisk P-MENU: x=20, y=SCREEN_HEIGHT-75, width=220, height=55
+    pmenu_x = 20
+    pmenu_width = 220
+    pmenu_right_edge = pmenu_x + pmenu_width
 
-    margin = 20
-    # Dodatkowy offset dla pozycji bottom - na podglądzie wyświetlaj wyżej (aby nie nachodzić na przycisk P-MENU)
-    bottom_preview_offset = 80  # Przesunięcie w górę dla pozycji bottom na podglądzie
-
-    if position == "top_left":
-        x, y = margin, margin
-    elif position == "top_right":
-        x, y = SCREEN_WIDTH - margin, margin
-        temp_surface = date_font.render(date_text, True, date_color)
-        x -= temp_surface.get_width()
-    elif position == "bottom_left":
-        x, y = margin, SCREEN_HEIGHT - margin - 30 - bottom_preview_offset
-    elif position == "bottom_right":
-        x, y = SCREEN_WIDTH - margin, SCREEN_HEIGHT - margin - 30 - bottom_preview_offset
-        temp_surface = date_font.render(date_text, True, date_color)
-        x -= temp_surface.get_width()
-    else:
-        x, y = margin, margin
+    spacing = 60  # Odstęp od przycisku P-MENU
+    x = pmenu_right_edge + spacing
+    y = SCREEN_HEIGHT - 65  # Ta sama wysokość co przycisk P-MENU (środek przycisku)
 
     draw_text_with_outline(date_text, date_font, date_color, BLACK, x, y)
 
@@ -3214,7 +3281,7 @@ def videos_navigate_right():
 
 def load_fonts():
     """Załaduj wszystkie czcionki na podstawie wybranej font_family"""
-    global font_large, font_medium, font_small, font_tiny, menu_font
+    global font_large, font_medium, font_small, font_tiny, menu_font, font_mediumXL
 
     font_family = camera_settings.get("font_family", "HomeVideo")
 
@@ -3233,6 +3300,7 @@ def load_fonts():
         font_small = pygame.font.Font(font_path, int(30 * font_scale))
         font_tiny = pygame.font.Font(font_path, int(24 * font_scale))
         menu_font = pygame.font.Font(font_path, int(65 * font_scale))
+        font_mediumXL = pygame.font.Font(font_path, int(55 * font_scale))  # Nowa czcionka dla formatu
         print(f"[OK] Czcionka załadowana: {font_family}")
     except Exception as e:
         # Jeśli nie udało się załadować, użyj domyślnej czcionki systemowej
@@ -3243,11 +3311,33 @@ def load_fonts():
         font_small = pygame.font.Font(None, 30)
         font_tiny = pygame.font.Font(None, 24)
         menu_font = pygame.font.Font(None, 65)
+        font_mediumXL = pygame.font.Font(None, 55)
+
+
+def pixelize_image(image, pixel_size=4):
+    """Spixelizuj obrazek poprzez skalowanie w dół i w górę"""
+    if image is None:
+        return None
+
+    # Pobierz aktualne wymiary
+    width, height = image.get_size()
+
+    # Oblicz nowe wymiary (podziel przez pixel_size)
+    small_width = max(1, width // pixel_size)
+    small_height = max(1, height // pixel_size)
+
+    # Skaluj w dół (zmniejsz)
+    small_image = pygame.transform.scale(image, (small_width, small_height))
+
+    # Skaluj z powrotem do oryginalnego rozmiaru (powiększ) - efekt pikseli
+    pixelized = pygame.transform.scale(small_image, (width, height))
+
+    return pixelized
 
 
 def load_images():
     """Załaduj obrazki interfejsu"""
-    global playback_icon, steadyhand_icon
+    global playback_icon, steadyhand_icon, sd_icon
 
     try:
         # Załaduj ikonę playback
@@ -3267,10 +3357,20 @@ def load_images():
         else:
             print(f"[WARN] Nie znaleziono pliku: {steadyhand_path}")
             steadyhand_icon = None
+
+        # Załaduj ikonę SD
+        sd_path = Path(__file__).parent / "sd.png"
+        if sd_path.exists():
+            sd_icon = pygame.image.load(str(sd_path))
+            print("[OK] Ikona SD załadowana")
+        else:
+            print(f"[WARN] Nie znaleziono pliku: {sd_path}")
+            sd_icon = None
     except Exception as e:
         print(f"[ERROR] Błąd wczytywania obrazków: {e}")
         playback_icon = None
         steadyhand_icon = None
+        sd_icon = None
 
 
 # ============================================================================
@@ -3646,12 +3746,13 @@ def draw_main_screen(frame):
     # Ukryj elementy UI podczas nagrywania
     if not recording:
         draw_menu_button()
-        draw_play_button()
         # draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
                 #  font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
     draw_zoom_bar()
     draw_recording_indicator()
+    draw_sd_indicator()
+    draw_recording_time_remaining()
 
 
 def draw_videos_screen():

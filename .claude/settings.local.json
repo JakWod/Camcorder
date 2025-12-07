@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python -m py_compile:*)",
       "Bash(dir:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []
