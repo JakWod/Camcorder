@@ -21,6 +21,9 @@ import threading
 import math
 import re
 from INA219 import INA219
+import pyaudio
+import wave
+import struct
 
 # ============================================================================
 # KONFIGURACJA
@@ -97,6 +100,19 @@ screen = None
 current_state = STATE_MAIN
 confirm_selection = 0
 fake_battery_level = None  # None = użyj rzeczywistego poziomu, lub wartość 0-100
+
+# Audio - mikrofon
+audio = None
+audio_stream = None
+audio_recording = False
+audio_file = None
+audio_thread = None
+audio_level = 0.0  # Aktualny poziom głośności (0.0 - 1.0)
+audio_device_index = None
+AUDIO_CHUNK = 1024
+AUDIO_FORMAT = pyaudio.paInt16
+AUDIO_CHANNELS = 1
+AUDIO_RATE = 44100
 
 # INA219 Battery Monitor
 BATTERY_CAPACITY_MAH = 2300  # Pojedyncza bateria 18650 2300mAh (3S)
@@ -583,6 +599,399 @@ def extract_fps_from_filename(filename):
         return fps
     print(f"[WARN] Brak FPS w nazwie, użyję domyślnego")
     return None
+
+
+# ============================================================================
+# FUNKCJE AUDIO - MIKROFON
+# ============================================================================
+
+def init_audio():
+    """Inicjalizuj PyAudio i wykryj mikrofon"""
+    global audio, audio_device_index
+
+    # Wycisz ostrzeżenia ALSA
+    import os
+    os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+
+    # Przekieruj stderr ALSA do /dev/null (wycisza ostrzeżenia ALSA)
+    import sys
+    from contextlib import contextmanager
+
+    @contextmanager
+    def suppress_alsa_errors():
+        """Tymczasowo wycisz błędy ALSA"""
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        sys.stderr.flush()
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        try:
+            yield
+        finally:
+            os.dup2(old_stderr, 2)
+            os.close(old_stderr)
+
+    try:
+        print("[AUDIO] Inicjalizacja PyAudio...")
+
+        # Inicjalizuj PyAudio z wyciszonymi ostrzeżeniami ALSA
+        with suppress_alsa_errors():
+            audio = pyaudio.PyAudio()
+
+        print("[AUDIO] PyAudio OK")
+
+        # Wyświetl dostępne urządzenia
+        device_count = audio.get_device_count()
+        print(f"[AUDIO] Znaleziono {device_count} urządzeń audio")
+
+        # Wyświetl wszystkie urządzenia wejściowe
+        input_devices = []
+        for i in range(device_count):
+            try:
+                with suppress_alsa_errors():
+                    info = audio.get_device_info_by_index(i)
+                print(f"[AUDIO] Device {i}: {info['name']}")
+                print(f"        Input channels: {info['maxInputChannels']}")
+                if info['maxInputChannels'] > 0:
+                    input_devices.append((i, info))
+                    print(f"        >>> MIKROFON <<<")
+            except Exception as e:
+                print(f"[AUDIO] Błąd odczytu urządzenia {i}: {e}")
+
+        if not input_devices:
+            print("[WARN] Nie znaleziono żadnych urządzeń wejściowych!")
+            audio = None
+            audio_device_index = None
+            return False
+
+        # Spróbuj najpierw domyślnego urządzenia
+        try:
+            with suppress_alsa_errors():
+                default_input = audio.get_default_input_device_info()
+            if default_input['maxInputChannels'] > 0:
+                audio_device_index = default_input['index']
+                print(f"[AUDIO] Domyślne urządzenie: {default_input['name']}")
+                print(f"[AUDIO] Device index: {audio_device_index}")
+
+                # TEST - Spróbuj otworzyć stream aby sprawdzić czy działa
+                try:
+                    with suppress_alsa_errors():
+                        test_stream = audio.open(
+                            format=AUDIO_FORMAT,
+                            channels=AUDIO_CHANNELS,
+                            rate=AUDIO_RATE,
+                            input=True,
+                            input_device_index=audio_device_index,
+                            frames_per_buffer=AUDIO_CHUNK
+                        )
+                        test_stream.close()
+                    print("[AUDIO] ✓ Test stream OK - urządzenie działa!")
+                    return True
+                except Exception as e:
+                    print(f"[AUDIO] ✗ Test stream FAILED: {e}")
+        except Exception as e:
+            print(f"[AUDIO] Nie można użyć domyślnego urządzenia: {e}")
+
+        # Jeśli domyślne nie działa, testuj wszystkie dostępne urządzenia
+        print("[AUDIO] Testuję wszystkie dostępne urządzenia wejściowe...")
+        for idx, info in input_devices:
+            print(f"[AUDIO] Próba {idx}: {info['name']}")
+            try:
+                with suppress_alsa_errors():
+                    test_stream = audio.open(
+                        format=AUDIO_FORMAT,
+                        channels=AUDIO_CHANNELS,
+                        rate=AUDIO_RATE,
+                        input=True,
+                        input_device_index=idx,
+                        frames_per_buffer=AUDIO_CHUNK
+                    )
+                    test_stream.close()
+
+                # Jeśli test się powiódł, użyj tego urządzenia
+                audio_device_index = idx
+                print(f"[AUDIO] ✓ SUKCES! Używam urządzenia {idx}: {info['name']}")
+                return True
+            except Exception as e:
+                print(f"[AUDIO] ✗ Urządzenie {idx} nie działa: {e}")
+                continue
+
+        # Jeśli żadne urządzenie nie działa
+        print("[ERROR] Żadne urządzenie audio nie działa!")
+        audio = None
+        audio_device_index = None
+        return False
+
+    except Exception as e:
+        print(f"[WARN] Błąd inicjalizacji audio: {e}")
+        import traceback
+        traceback.print_exc()
+        audio = None
+        audio_device_index = None
+        return False
+
+
+def calculate_audio_level(data):
+    """Oblicz poziom głośności z danych audio (RMS)"""
+    try:
+        # Konwertuj bajty na wartości int16
+        audio_data = np.frombuffer(data, dtype=np.int16)
+
+        # Oblicz RMS (Root Mean Square) - użyj float64 aby uniknąć overflow
+        mean_square = np.mean(audio_data.astype(np.float64)**2)
+
+        # Sprawdź czy wartość jest poprawna przed sqrt
+        if np.isnan(mean_square) or np.isinf(mean_square) or mean_square < 0:
+            return 0.0
+
+        rms = np.sqrt(mean_square)
+
+        # Normalizuj do zakresu 0.0 - 1.0
+        # Maksymalna wartość dla int16 to 32768
+        normalized = min(1.0, rms / 32768.0)
+
+        # Zastosuj nieliniową skalę (logarytmiczną) dla lepszej wizualizacji
+        if normalized > 0:
+            normalized = min(1.0, normalized * 10)  # Wzmocnienie dla małych dźwięków
+
+        return normalized
+
+    except Exception as e:
+        return 0.0
+
+
+def audio_recording_thread(audio_filepath):
+    """Wątek nagrywający audio w tle"""
+    global audio_stream, audio_recording, audio_level
+
+    # Wycisz błędy ALSA podczas nagrywania
+    import os
+    import sys
+    from contextlib import contextmanager
+
+    @contextmanager
+    def suppress_alsa_errors():
+        """Tymczasowo wycisz błędy ALSA"""
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        sys.stderr.flush()
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        try:
+            yield
+        finally:
+            os.dup2(old_stderr, 2)
+            os.close(old_stderr)
+
+    try:
+        print(f"[AUDIO] Start nagrywania: {audio_filepath}")
+        print(f"[AUDIO] Device index: {audio_device_index}")
+        print(f"[AUDIO] Format: {AUDIO_FORMAT}, Channels: {AUDIO_CHANNELS}, Rate: {AUDIO_RATE}")
+
+        # Otwórz stream audio z wyciszonymi błędami ALSA
+        with suppress_alsa_errors():
+            audio_stream = audio.open(
+                format=AUDIO_FORMAT,
+                channels=AUDIO_CHANNELS,
+                rate=AUDIO_RATE,
+                input=True,
+                input_device_index=audio_device_index,
+                frames_per_buffer=AUDIO_CHUNK
+            )
+
+        print("[AUDIO] Stream otwarty pomyślnie")
+
+        # Otwórz plik WAV do zapisu
+        wf = wave.open(str(audio_filepath), 'wb')
+        wf.setnchannels(AUDIO_CHANNELS)
+        wf.setsampwidth(audio.get_sample_size(AUDIO_FORMAT))
+        wf.setframerate(AUDIO_RATE)
+
+        print("[AUDIO] Plik WAV otwarty, rozpoczynam nagrywanie...")
+
+        frame_count = 0
+        # Nagrywaj dopóki audio_recording == True
+        while audio_recording:
+            try:
+                data = audio_stream.read(AUDIO_CHUNK, exception_on_overflow=False)
+                wf.writeframes(data)
+
+                # Oblicz poziom głośności
+                audio_level = calculate_audio_level(data)
+
+                frame_count += 1
+                # Co sekundę wypisz diagnostykę
+                if frame_count % 43 == 0:  # ~1 sekunda przy 44100Hz / 1024
+                    print(f"[AUDIO] Nagrywanie... poziom: {audio_level:.3f}")
+
+            except Exception as e:
+                print(f"[WARN] Błąd odczytu audio: {e}")
+                import traceback
+                traceback.print_exc()
+                break
+
+        # Zamknij stream i plik
+        audio_stream.stop_stream()
+        audio_stream.close()
+        audio_stream = None
+        wf.close()
+
+        print(f"[AUDIO] Zatrzymano nagrywanie audio")
+        print(f"[AUDIO] Nagrano {frame_count} ramek")
+
+        # Sprawdź rozmiar pliku
+        if audio_filepath.exists():
+            size = audio_filepath.stat().st_size
+            print(f"[AUDIO] Rozmiar pliku WAV: {size} bajtów")
+        else:
+            print("[ERROR] Plik audio nie został utworzony!")
+
+    except Exception as e:
+        print(f"[ERROR] Błąd nagrywania audio: {e}")
+        import traceback
+        traceback.print_exc()
+        audio_recording = False
+        if audio_stream:
+            audio_stream.stop_stream()
+            audio_stream.close()
+            audio_stream = None
+
+
+def start_audio_recording(video_filepath):
+    """Rozpocznij nagrywanie audio"""
+    global audio_recording, audio_thread, audio_file, audio_level
+
+    if not audio:
+        print("[WARN] Audio nie zainicjalizowane")
+        return None
+
+    # Ścieżka do pliku audio (ten sam stem co video)
+    audio_file = video_filepath.parent / f"{video_filepath.stem}.wav"
+
+    audio_level = 0.0
+    audio_recording = True
+
+    # Uruchom wątek nagrywania
+    audio_thread = threading.Thread(target=audio_recording_thread, args=(audio_file,), daemon=True)
+    audio_thread.start()
+
+    return audio_file
+
+
+def stop_audio_recording():
+    """Zatrzymaj nagrywanie audio"""
+    global audio_recording, audio_thread, audio_level
+
+    audio_recording = False
+    audio_level = 0.0
+
+    # Poczekaj na zakończenie wątku
+    if audio_thread and audio_thread.is_alive():
+        audio_thread.join(timeout=2.0)
+        audio_thread = None
+
+
+def merge_audio_video(video_path, audio_path):
+    """Połącz audio i video w jeden plik MP4"""
+    try:
+        print(f"[MERGE] Łączenie audio i video...")
+
+        if not audio_path.exists():
+            print("[WARN] Plik audio nie istnieje")
+            return False
+
+        if audio_path.stat().st_size < 1000:
+            print("[WARN] Plik audio zbyt mały, pomijam")
+            audio_path.unlink()
+            return True
+
+        # Plik tymczasowy dla video z audio
+        temp_output = video_path.parent / f"temp_merged_{video_path.name}"
+
+        # Użyj ffmpeg do połączenia
+        cmd = [
+            "ffmpeg",
+            "-i", str(video_path),
+            "-i", str(audio_path),
+            "-c:v", "copy",  # Kopiuj video bez reenkodowania
+            "-c:a", "aac",   # Enkoduj audio do AAC
+            "-b:a", "128k",  # Bitrate audio 128kbps
+            "-shortest",     # Użyj krótszego strumienia
+            "-y",
+            str(temp_output)
+        ]
+
+        print(f"[MERGE] Uruchamiam ffmpeg...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        if result.returncode != 0:
+            print(f"[ERROR] Błąd ffmpeg: {result.stderr}")
+            if temp_output.exists():
+                temp_output.unlink()
+            return False
+
+        # Sprawdź czy plik został utworzony
+        if not temp_output.exists() or temp_output.stat().st_size < 1000:
+            print("[ERROR] Plik wyjściowy nieprawidłowy")
+            if temp_output.exists():
+                temp_output.unlink()
+            return False
+
+        # Zamień pliki
+        video_path.unlink()
+        temp_output.rename(video_path)
+
+        # Usuń plik audio
+        audio_path.unlink()
+
+        print(f"[OK] Audio i video połączone")
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] Błąd łączenia: {e}")
+        if 'temp_output' in locals() and temp_output.exists():
+            temp_output.unlink()
+        return False
+
+
+def draw_audio_level_indicator():
+    """Rysuj wskaźnik poziomu głośności nad przyciskiem P-MENU"""
+    if not audio or current_state != STATE_MAIN:
+        return
+
+    # Pozycja nad przyciskiem P-MENU (lewy dolny róg)
+    button_x = 20
+    button_width = 220
+    indicator_width = button_width
+    indicator_height = 25
+    indicator_x = button_x
+    indicator_y = SCREEN_HEIGHT - 75 - indicator_height - 15  # 15px nad przyciskiem
+
+    # Tło wskaźnika - czarne z białą ramką
+    pygame.draw.rect(screen, BLACK, (indicator_x, indicator_y, indicator_width, indicator_height), border_radius=5)
+    pygame.draw.rect(screen, WHITE, (indicator_x, indicator_y, indicator_width, indicator_height), 2, border_radius=5)
+
+    # Pasek poziomu - zielony gdy jest dźwięk
+    if audio_level > 0.01:  # Próg szumu
+        bar_width = int((indicator_width - 8) * audio_level)
+
+        # Kolor w zależności od poziomu (zielony -> żółty -> czerwony)
+        if audio_level < 0.6:
+            bar_color = GREEN
+        elif audio_level < 0.85:
+            bar_color = YELLOW
+        else:
+            bar_color = RED
+
+        if bar_width > 0:
+            pygame.draw.rect(screen, bar_color,
+                           (indicator_x + 4, indicator_y + 4, bar_width, indicator_height - 8),
+                           border_radius=3)
+
+    # Ikona mikrofonu po lewej stronie
+    mic_text = "MIC"
+    mic_color = GREEN if audio_level > 0.01 else GRAY
+    draw_text(mic_text, font_tiny, mic_color, indicator_x + 15, indicator_y + indicator_height // 2 - 5)
 
 
 # ============================================================================
@@ -3724,25 +4133,29 @@ def init_camera():
 def start_recording():
     """Start nagrywania - FPS w nazwie pliku"""
     global recording, current_file, encoder, recording_start_time, current_recording_fps
-    
+
     if not recording:
         current_recording_fps = get_current_fps()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
         current_file = VIDEO_DIR / f"video_{timestamp}_{current_recording_fps}fps.mp4"
-        
+
         print(f"[REC] START: {current_file.name}")
         print(f"[VIDEO] FPS: {current_recording_fps}")
-        
+
         try:
             resolution = camera_settings.get("video_resolution", "1080p30")
             bitrate = BITRATE_MAP.get(resolution, 10000000)
-            
+
             encoder = H264Encoder(bitrate=bitrate, framerate=current_recording_fps)
             output = FfmpegOutput(str(current_file))
             camera.start_encoder(encoder, output)
             recording = True
             recording_start_time = time.time()
+
+            # Rozpocznij nagrywanie audio
+            start_audio_recording(current_file)
+
             print(f"[OK] Nagrywanie @ {current_recording_fps} FPS")
         except Exception as e:
             print(f"[ERROR] Błąd start: {e}")
@@ -3755,53 +4168,63 @@ def start_recording():
 def stop_recording():
     """Stop nagrywania"""
     global recording, current_file, encoder, recording_start_time, current_recording_fps
-    
+
     if recording:
         print("[STOP] STOP...")
         recording = False
         saved_file = current_file
         saved_fps = current_recording_fps
-        
+        saved_audio_file = audio_file
+
         try:
+            # Zatrzymaj nagrywanie audio
+            stop_audio_recording()
+
             camera.stop_encoder()
             print("[OK] Encoder zatrzymany")
-            
+
             time.sleep(1.5)
-            
+
             if saved_file and saved_file.exists():
                 size = saved_file.stat().st_size / (1024*1024)
-                
+
                 if size < 0.1:
                     print(f"[WARN] Plik zbyt mały ({size:.1f} MB)")
                 else:
                     print(f"[OK] Zapisano: {size:.1f} MB @ {saved_fps} FPS")
-                    
+
                     verify_cap = cv2.VideoCapture(str(saved_file))
                     recorded_fps = verify_cap.get(cv2.CAP_PROP_FPS)
                     verify_cap.release()
                     print(f"[FPS] OpenCV wykrył FPS: {recorded_fps:.2f}")
-                    
+
                     print("[THUMB] Generowanie miniatury...")
                     generate_thumbnail(saved_file)
-                    
-                    if camera_settings.get("show_date", False):
-                        def process_video():
+
+                    # Przetwarzanie wideo w wątku
+                    def process_video():
+                        # Połącz audio i video
+                        if saved_audio_file and saved_audio_file.exists():
+                            print("[MERGE] Łączenie audio z video...")
+                            merge_audio_video(saved_file, saved_audio_file)
+
+                        # Dodaj datę jeśli włączona
+                        if camera_settings.get("show_date", False):
                             print("[DATE] Dodawanie daty...")
                             add_date_overlay_to_video(saved_file)
-                            print("[OK] Przetwarzanie zakończone")
-                        
-                        thread = threading.Thread(target=process_video, daemon=True)
-                        thread.start()
-                    else:
+
                         print("[OK] Przetwarzanie zakończone")
+
+                    thread = threading.Thread(target=process_video, daemon=True)
+                    thread.start()
             else:
                 print(f"[ERROR] Plik nie istnieje")
-                
+
         except Exception as e:
             print(f"[ERROR] Błąd: {e}")
             import traceback
             traceback.print_exc()
-        
+
         finally:
             encoder = None
             current_file = None
@@ -3949,6 +4372,7 @@ def draw_main_screen(frame):
     # Ukryj elementy UI podczas nagrywania
     if not recording:
         draw_menu_button()
+        draw_audio_level_indicator()  # Wskaźnik mikrofonu nad P-MENU
         # draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
                 #  font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
@@ -4985,12 +5409,24 @@ def handle_zoom_out():
 
 def cleanup(signum=None, frame=None):
     """Zamknięcie"""
-    global camera, recording, running, video_capture
+    global camera, recording, running, video_capture, audio, audio_recording
     print("\n[CLEANUP] Zamykanie...")
     running = False
 
     if video_capture:
         video_capture.release()
+
+    # Zatrzymaj nagrywanie audio jeśli aktywne
+    if audio_recording:
+        stop_audio_recording()
+
+    # Zamknij PyAudio
+    if audio:
+        try:
+            audio.terminate()
+            print("[OK] Audio cleanup OK")
+        except:
+            pass
 
     if recording:
         stop_recording()
@@ -5026,6 +5462,17 @@ if __name__ == '__main__':
 
     init_pygame()
     init_camera()
+
+    # Inicjalizacja audio - mikrofon
+    print("\n" + "="*70)
+    print("[AUDIO] INICJALIZACJA SYSTEMU AUDIO")
+    print("="*70)
+    audio_ok = init_audio()
+    if audio_ok:
+        print(f"[OK] Audio zainicjalizowane - device_index: {audio_device_index}")
+    else:
+        print("[WARN] Audio nie zainicjalizowane - aplikacja będzie działać bez dźwięku")
+    print("="*70 + "\n")
 
     # Inicjalizacja INA219 Battery Monitor
     try:
