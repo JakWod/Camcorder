@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 import threading
 import math
 import re
+from INA219 import INA219
 
 # ============================================================================
 # KONFIGURACJA
@@ -96,6 +97,19 @@ screen = None
 current_state = STATE_MAIN
 confirm_selection = 0
 fake_battery_level = None  # None = użyj rzeczywistego poziomu, lub wartość 0-100
+
+# INA219 Battery Monitor
+BATTERY_CAPACITY_MAH = 2300  # Pojedyncza bateria 18650 2300mAh (3S)
+ina219 = None
+battery_current = 0  # Prąd w mA
+battery_last_level = 100  # Ostatni zmierzony poziom baterii
+battery_last_check_time = 0  # Czas ostatniego pomiaru
+battery_estimated_minutes = 120  # Szacowany czas w minutach (domyślnie 2h)
+battery_is_charging = False  # Stan ładowania z histerezą
+battery_charge_hysteresis_high = 10  # Próg górny histerezy (mA) - włącz ładowanie
+battery_charge_hysteresis_low = -10   # Próg dolny histerezy (mA) - wyłącz ładowanie
+battery_voltage_samples = []  # Próbki napięcia do średniej kroczącej (5 próbek)
+battery_max_displayed_level = 100.0  # Maksymalny wyświetlany poziom (tylko maleje podczas rozładowania)
 
 # Matryca przycisków
 matrix_cols = []
@@ -2695,27 +2709,123 @@ def draw_grid_overlay():
 
 
 def get_battery_level():
-    """Odczytaj poziom naładowania baterii (0-100)"""
+    """Odczytaj poziom naładowania baterii (0-100) oraz prąd ładowania"""
+    global battery_current, battery_voltage_samples
+
     # Jeśli ustawiono fikcyjny poziom baterii, użyj go
     if fake_battery_level is not None:
+        battery_current = 0
         return fake_battery_level
 
-    try:
-        # Próba odczytu z systemu Linux (Raspberry Pi)
-        with open('/sys/class/power_supply/BAT0/capacity', 'r') as f:
-            return int(f.read().strip())
-    except:
+    # Odczyt z INA219
+    if ina219 is not None:
         try:
-            # Alternatywna ścieżka dla niektórych systemów
-            with open('/sys/class/power_supply/BAT1/capacity', 'r') as f:
-                return int(f.read().strip())
-        except:
-            # Jeśli nie można odczytać, zwróć 100% (pełna bateria jako domyślna)
+            bus_voltage = ina219.getBusVoltage_V()
+            battery_current = ina219.getCurrent_mA()
+
+            # Dodaj próbkę napięcia do listy (średnia krocząca z 5 próbek)
+            battery_voltage_samples.append(bus_voltage)
+            if len(battery_voltage_samples) > 5:
+                battery_voltage_samples.pop(0)
+
+            # Oblicz średnią z próbek
+            avg_voltage = sum(battery_voltage_samples) / len(battery_voltage_samples)
+
+            # Oblicz procent baterii na podstawie średniego napięcia (9V = 0%, 12.6V = 100%)
+            p = (avg_voltage - 9) / 3.6 * 100
+            if p > 100:
+                p = 100
+            if p < 0:
+                p = 0
+
+            return int(p)
+        except Exception as e:
+            print(f"[INA219] Error reading battery: {e}")
+            battery_current = 0
             return 100
+
+    # Fallback - zwróć 100%
+    battery_current = 0
+    return 100
+
+
+def update_battery_estimate():
+    """Aktualizuj szacowany czas pracy baterii na podstawie tempa rozładowywania"""
+    global battery_last_level, battery_last_check_time, battery_estimated_minutes, battery_is_charging, battery_max_displayed_level
+
+    current_time = time.time()
+    current_level = get_battery_level()
+
+    # Histereza ładowania - zapobiega migotaniu ikony
+    if battery_is_charging:
+        # Jeśli ładuje, wymagamy prądu poniżej progu dolnego aby wyłączyć
+        if battery_current < battery_charge_hysteresis_low:
+            battery_is_charging = False
+    else:
+        # Jeśli nie ładuje, wymagamy prądu powyżej progu górnego aby włączyć
+        if battery_current > battery_charge_hysteresis_high:
+            battery_is_charging = True
+
+    # Oblicz precyzyjny procent z napięcia dla wyświetlania
+    precise_percent = float(current_level)
+    if ina219 is not None and fake_battery_level is None:
+        try:
+            # Użyj średniego napięcia
+            if len(battery_voltage_samples) > 0:
+                avg_voltage = sum(battery_voltage_samples) / len(battery_voltage_samples)
+                precise_percent = ((avg_voltage - 9) / 3.6) * 100
+                if precise_percent > 100:
+                    precise_percent = 100
+                if precise_percent < 0:
+                    precise_percent = 0
+        except:
+            pass
+
+    # Zarządzanie maksymalnym wyświetlanym poziomem
+    if battery_is_charging:
+        # Podczas ładowania pozwól na zwiększenie poziomu
+        battery_max_displayed_level = max(battery_max_displayed_level, precise_percent)
+    else:
+        # Podczas rozładowywania - tylko zmniejszaj (nigdy nie zwiększaj)
+        battery_max_displayed_level = min(battery_max_displayed_level, precise_percent)
+
+    # Co 30 sekund aktualizuj szacowanie czasu
+    if current_time - battery_last_check_time >= 30:
+        if battery_last_check_time > 0:  # Pomijamy pierwszy pomiar
+            time_diff_seconds = current_time - battery_last_check_time
+
+            # Jeśli bateria nie ładuje i pobiera prąd - oblicz czas na podstawie rzeczywistego zużycia
+            if not battery_is_charging and battery_current < 0:
+                # Prąd rozładowania w mA (wartość ujemna, więc używamy abs)
+                discharge_current_ma = abs(battery_current)
+
+                if discharge_current_ma > 10:  # Minimalny próg 10mA aby uniknąć dzielenia przez ~0
+                    # Ile mAh zostało w baterii
+                    remaining_mah = (battery_max_displayed_level / 100.0) * BATTERY_CAPACITY_MAH
+
+                    # Czas w godzinach = pojemność / prąd
+                    remaining_hours = remaining_mah / discharge_current_ma
+                    battery_estimated_minutes = int(remaining_hours * 60)
+
+                    # Ogranicz maksymalny czas do 9999 minut
+                    battery_estimated_minutes = min(9999, battery_estimated_minutes)
+                else:
+                    # Bardzo mały prąd - pokaż długi czas
+                    battery_estimated_minutes = 9999
+            else:
+                # Ładowanie lub brak rozładowania - pokaż długi czas
+                battery_estimated_minutes = 9999
+
+        # Zaktualizuj wartości referencyjne
+        battery_last_level = current_level
+        battery_last_check_time = current_time
 
 
 def draw_battery_icon():
-    """Rysuj ikonę baterii z 4 segmentami w prawym dolnym rogu (biała, większa, zwrócona w lewo)"""
+    """Rysuj ikonę baterii z 4 segmentami w prawym dolnym rogu (biała/zielona z piorunkiem gdy ładuje)"""
+    # Użyj stanu z histerezy zamiast sprawdzać prąd bezpośrednio
+    is_charging = battery_is_charging
+
     # Pozycja i rozmiar baterii - prawy dolny róg - ZWIĘKSZONE ROZMIARY
     battery_width = 70  # Zwiększone z 60
     battery_height = 33  # Zwiększone z 28
@@ -2724,6 +2834,9 @@ def draw_battery_icon():
     battery_x = SCREEN_WIDTH - right_margin - battery_width - 5  # Przesunięte 5px w lewo
     battery_y = SCREEN_HEIGHT - bottom_margin - battery_height - 10
 
+    # Wybierz kolor w zależności od stanu ładowania (z histerezy)
+    battery_color = GREEN if is_charging else WHITE
+
     # Czarne tło pod baterią (outline)
     outline_padding = 2
     pygame.draw.rect(screen, BLACK,
@@ -2731,8 +2844,8 @@ def draw_battery_icon():
                       battery_width + outline_padding * 2, battery_height + outline_padding * 2),
                      border_radius=5)
 
-    # Główna ramka baterii (BIAŁA zamiast zielonej)
-    pygame.draw.rect(screen, WHITE,
+    # Główna ramka baterii (ZIELONA gdy ładuje, BIAŁA gdy nie)
+    pygame.draw.rect(screen, battery_color,
                      (battery_x, battery_y, battery_width, battery_height),
                      3, border_radius=5)
 
@@ -2746,8 +2859,8 @@ def draw_battery_icon():
     pygame.draw.rect(screen, BLACK,
                      (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
 
-    # Biała końcówka
-    pygame.draw.rect(screen, WHITE,
+    # Końcówka w kolorze baterii
+    pygame.draw.rect(screen, battery_color,
                      (tip_x, tip_y, tip_width, tip_height))
 
     # Ustawienia segmentów
@@ -2778,7 +2891,9 @@ def draw_battery_icon():
     )
     screen.set_clip(clip_rect)
 
-    # Rysuj segmenty (od lewej do prawej)
+    # Rysuj segmenty (od lewej do prawej) - ZIELONE gdy ładuje, BIAŁE gdy nie
+    segment_color = GREEN if is_charging else WHITE
+
     for i in range(segments_to_draw):
         segment_x = segments_start_x + i * (segment_width + segment_spacing)
 
@@ -2791,31 +2906,86 @@ def draw_battery_icon():
         )
         pygame.draw.rect(screen, BLACK, outline_rect)
 
-        # Biały segment (zamiast zielonego)
+        # Segment w odpowiednim kolorze (zielony gdy ładuje, biały gdy nie)
         segment_rect = pygame.Rect(
             segment_x,
             segment_y,
             segment_width,
             segment_height
         )
-        pygame.draw.rect(screen, WHITE, segment_rect)
+        pygame.draw.rect(screen, segment_color, segment_rect)
 
     # Wyłącz clipping
     screen.set_clip(None)
 
-    # Czas baterii poniżej ikony baterii - FORMAT hh:mm
-    # Szacowany czas pracy baterii w minutach na podstawie poziomu baterii
-    estimated_minutes = int(battery_level * 1.2)  # Prosty przelicznik (100% = 120 min)
-    hours = estimated_minutes // 60
-    minutes = estimated_minutes % 60
-    time_text = f"{hours:02d}:{minutes:02d}"
+    # Rysuj piorunek gdy bateria się ładuje
+    if is_charging:
+        # Piorunek w środku baterii (klasyczny kształt)
+        lightning_center_x = battery_x + battery_width // 2
+        lightning_center_y = battery_y + battery_height // 2
 
-    # Pozycja tekstu poniżej baterii, wyrównane do prawej
-    time_text_surface = font_large.render(time_text, True, WHITE)
-    time_text_width = time_text_surface.get_width()
-    time_x = SCREEN_WIDTH - right_margin - time_text_width
+        # Punkty pioruna - klasyczny kształt zigzag
+        lightning_points = [
+            (lightning_center_x - 2, lightning_center_y - 10),  # Lewy górny
+            (lightning_center_x + 2, lightning_center_y - 10),  # Prawy górny
+            (lightning_center_x + 5, lightning_center_y - 2),   # Prawy środek-góra
+            (lightning_center_x + 2, lightning_center_y - 2),   # Wejście do środka
+            (lightning_center_x + 6, lightning_center_y + 10),  # Prawy dolny
+            (lightning_center_x + 2, lightning_center_y + 10),  # Środek dolny
+            (lightning_center_x + 1, lightning_center_y + 2),   # Środek
+            (lightning_center_x - 2, lightning_center_y + 2),   # Lewy środek
+            (lightning_center_x - 6, lightning_center_y - 2),   # Lewy wystający
+        ]
+
+        # Czarne obramowanie pioruna (grubsze)
+        for i in range(len(lightning_points)):
+            p1 = lightning_points[i]
+            p2 = lightning_points[(i + 1) % len(lightning_points)]
+            pygame.draw.line(screen, BLACK, p1, p2, 4)
+
+        # Żółty wypełniony piorun
+        pygame.draw.polygon(screen, YELLOW, lightning_points)
+
+    # Szacowany czas pracy baterii poniżej ikony - FORMAT hh:mm lub --:-- gdy ładuje
+    if is_charging:
+        # Podczas ładowania pokaż --:--
+        time_text = "--:--"
+    else:
+        # Podczas rozładowania pokaż rzeczywisty czas
+        hours = battery_estimated_minutes // 60
+        minutes = battery_estimated_minutes % 60
+
+        # Ogranicz maksymalny czas do 99:59
+        if hours > 99:
+            hours = 99
+            minutes = 59
+
+        time_text = f"{hours:02d}:{minutes:02d}"
+
+    # Użyj śledzonego maksymalnego poziomu (który tylko maleje podczas rozładowania)
+    precise_percent = battery_max_displayed_level
+
+    percent_text = f"{precise_percent:.1f}%"
+
+    # Pozycja tekstów poniżej baterii
     time_y = battery_y + battery_height + 20
 
+    # Procent po lewej, czas po prawej
+    # Oblicz szerokości
+    percent_text_surface = font_large.render(percent_text, True, WHITE)
+    percent_text_width = percent_text_surface.get_width()
+    time_text_surface = font_large.render(time_text, True, WHITE)
+    time_text_width = time_text_surface.get_width()
+
+    # Pozycja czasu - wyrównane do prawej
+    time_x = SCREEN_WIDTH - right_margin - time_text_width
+
+    # Pozycja procentu - na lewo od czasu z odstępem
+    spacing = 20
+    percent_x = time_x - spacing - percent_text_width
+
+    # Rysuj procent i czas
+    draw_text_with_outline(percent_text, font_large, WHITE, BLACK, percent_x, time_y)
     draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x, time_y)
 
 
@@ -4857,6 +5027,14 @@ if __name__ == '__main__':
     init_pygame()
     init_camera()
 
+    # Inicjalizacja INA219 Battery Monitor
+    try:
+        ina219 = INA219(addr=0x41)
+        print("[INA219] Battery monitor initialized successfully")
+    except Exception as e:
+        print(f"[INA219] Failed to initialize battery monitor: {e}")
+        ina219 = None
+
     # Inicjalizacja matrycy przycisków 4x4
     init_matrix()
 
@@ -4895,6 +5073,9 @@ if __name__ == '__main__':
                         cleanup()
 
             current_time = time.time()
+
+            # Aktualizuj szacowany czas baterii (co 30 sekund)
+            update_battery_estimate()
 
             # Skanuj matrycę przycisków i wywołaj handlery
             check_matrix_buttons()
