@@ -109,6 +109,9 @@ audio_file = None
 audio_thread = None
 audio_level = 0.0  # Aktualny poziom głośności (0.0 - 1.0)
 audio_device_index = None
+audio_monitoring_stream = None  # NOWY: Stream do ciągłego monitoringu poziomu
+audio_monitoring_thread = None  # NOWY: Wątek monitorujący poziom audio
+audio_monitoring_active = False  # NOWY: Czy monitoring jest aktywny
 AUDIO_CHUNK = 1024
 AUDIO_FORMAT = pyaudio.paInt16
 AUDIO_CHANNELS = 1
@@ -760,6 +763,118 @@ def calculate_audio_level(data):
         return 0.0
 
 
+def audio_monitoring_loop():
+    """NOWY: Ciągły monitoring poziomu audio - działa w tle ZAWSZE (nie tylko podczas nagrywania)"""
+    global audio_monitoring_stream, audio_monitoring_active, audio_level
+
+    # Wycisz błędy ALSA
+    import os
+    import sys
+    from contextlib import contextmanager
+
+    @contextmanager
+    def suppress_alsa_errors():
+        """Tymczasowo wycisz błędy ALSA"""
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        sys.stderr.flush()
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        try:
+            yield
+        finally:
+            os.dup2(old_stderr, 2)
+            os.close(old_stderr)
+
+    try:
+        print(f"[AUDIO-MON] Start monitoringu poziomu dźwięku")
+
+        # Otwórz stream audio TYLKO do odczytu poziomu (nie nagrywamy do pliku)
+        with suppress_alsa_errors():
+            audio_monitoring_stream = audio.open(
+                format=AUDIO_FORMAT,
+                channels=AUDIO_CHANNELS,
+                rate=AUDIO_RATE,
+                input=True,
+                input_device_index=audio_device_index,
+                frames_per_buffer=AUDIO_CHUNK
+            )
+
+        print("[AUDIO-MON] Stream monitoring otwarty")
+
+        # Pętla monitorująca - działa dopóki audio_monitoring_active == True
+        while audio_monitoring_active:
+            try:
+                # Odczytaj dane audio (ale NIE zapisuj do pliku)
+                data = audio_monitoring_stream.read(AUDIO_CHUNK, exception_on_overflow=False)
+
+                # Oblicz poziom głośności
+                level = calculate_audio_level(data)
+
+                # Thread-safe update zmiennej globalnej
+                globals()['audio_level'] = level
+
+            except Exception as e:
+                # Ignoruj błędy odczytu (przepełnienie bufora itp.)
+                pass
+
+        # Zamknij stream po zakończeniu
+        if audio_monitoring_stream:
+            audio_monitoring_stream.stop_stream()
+            audio_monitoring_stream.close()
+            audio_monitoring_stream = None
+
+        print(f"[AUDIO-MON] Zatrzymano monitoring poziomu dźwięku")
+
+    except Exception as e:
+        print(f"[ERROR] Błąd monitoringu audio: {e}")
+        audio_monitoring_active = False
+        if audio_monitoring_stream:
+            try:
+                audio_monitoring_stream.stop_stream()
+                audio_monitoring_stream.close()
+            except:
+                pass
+            audio_monitoring_stream = None
+
+
+def start_audio_monitoring():
+    """NOWY: Uruchom ciągły monitoring poziomu audio"""
+    global audio_monitoring_active, audio_monitoring_thread
+
+    if not audio or audio_device_index is None:
+        print("[WARN] Audio nie zainicjalizowane - brak monitoringu")
+        return False
+
+    if audio_monitoring_active:
+        print("[WARN] Monitoring już aktywny")
+        return True
+
+    audio_monitoring_active = True
+
+    # Uruchom wątek monitorujący
+    audio_monitoring_thread = threading.Thread(target=audio_monitoring_loop, daemon=True)
+    audio_monitoring_thread.start()
+
+    print("[AUDIO-MON] Monitoring poziomu audio uruchomiony")
+    return True
+
+
+def stop_audio_monitoring():
+    """NOWY: Zatrzymaj ciągły monitoring poziomu audio"""
+    global audio_monitoring_active, audio_monitoring_thread, audio_level
+
+    audio_monitoring_active = False
+    audio_level = 0.0
+
+    # Poczekaj na zakończenie wątku
+    if audio_monitoring_thread and audio_monitoring_thread.is_alive():
+        audio_monitoring_thread.join(timeout=2.0)
+        audio_monitoring_thread = None
+
+    print("[AUDIO-MON] Monitoring poziomu audio zatrzymany")
+
+
 def audio_recording_thread(audio_filepath):
     """Wątek nagrywający audio w tle"""
     global audio_stream, audio_recording, audio_level
@@ -816,13 +931,16 @@ def audio_recording_thread(audio_filepath):
                 data = audio_stream.read(AUDIO_CHUNK, exception_on_overflow=False)
                 wf.writeframes(data)
 
-                # Oblicz poziom głośności
-                audio_level = calculate_audio_level(data)
+                # NAPRAWIONE: Oblicz poziom głośności i zapisz w zmiennej globalnej
+                level = calculate_audio_level(data)
+
+                # Thread-safe update zmiennej globalnej
+                globals()['audio_level'] = level
 
                 frame_count += 1
                 # Co sekundę wypisz diagnostykę
                 if frame_count % 43 == 0:  # ~1 sekunda przy 44100Hz / 1024
-                    print(f"[AUDIO] Nagrywanie... poziom: {audio_level:.3f}")
+                    print(f"[AUDIO] Nagrywanie... poziom: {level:.3f}")
 
             except Exception as e:
                 print(f"[WARN] Błąd odczytu audio: {e}")
@@ -956,6 +1074,7 @@ def merge_audio_video(video_path, audio_path):
 
 def draw_audio_level_indicator():
     """Rysuj wskaźnik poziomu głośności nad przyciskiem P-MENU"""
+    # NAPRAWIONE: Rysuj wskaźnik ZAWSZE na ekranie głównym (nie tylko podczas nagrywania)
     if not audio or current_state != STATE_MAIN:
         return
 
@@ -4081,6 +4200,13 @@ def init_pygame():
     print("[INIT] Pygame init...")
     pygame.init()
 
+    # NAPRAWIONE: Inicjalizuj pygame.mixer dla odtwarzania dźwięku
+    try:
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
+        print("[MIXER] Pygame mixer zainicjalizowany")
+    except Exception as e:
+        print(f"[WARN] Nie można zainicjalizować pygame.mixer: {e}")
+
     info = pygame.display.Info()
     SCREEN_WIDTH = info.current_w
     SCREEN_HEIGHT = info.current_h
@@ -4240,33 +4366,43 @@ def start_video_playback(video_path):
     """Rozpocznij odtwarzanie - FPS z nazwy pliku"""
     global video_capture, video_current_frame, video_total_frames, video_fps
     global video_path_playing, video_paused, current_state, video_last_frame_time, video_last_surface
-    
+
     print(f"\n[PLAY] ODTWARZANIE: {video_path.name}")
-    
+
     video_capture = cv2.VideoCapture(str(video_path))
     if not video_capture.isOpened():
         print("[ERROR] Nie można otworzyć")
         return False
-    
+
     video_fps = extract_fps_from_filename(video_path.name)
-    
+
     if not video_fps:
         video_fps = video_capture.get(cv2.CAP_PROP_FPS)
         print(f"[FPS] OpenCV FPS: {video_fps}")
-    
+
     if video_fps <= 0 or video_fps > 50:
         video_fps = 30
         print(f"[WARN] FPS nieprawidłowy, użyto 30")
-    
+
     print(f"[OK] UŻYWAM FPS: {video_fps}")
-    
+
     video_total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     video_current_frame = 0
     video_paused = False
     video_path_playing = video_path
     video_last_frame_time = time.time()
     video_last_surface = None
-    
+
+    # NAPRAWIONE: Odtwórz dźwięk video używając pygame.mixer
+    try:
+        # Sprawdź czy video ma audio track (musi być MP4 z audio)
+        # Pygame mixer może odtwarzać MP4 bezpośrednio
+        pygame.mixer.music.load(str(video_path))
+        pygame.mixer.music.play()
+        print(f"[AUDIO] Odtwarzanie dźwięku z: {video_path.name}")
+    except Exception as e:
+        print(f"[WARN] Nie można odtworzyć dźwięku: {e}")
+
     current_state = STATE_PLAYING
     print(f"[OK] Wideo: {video_total_frames} klatek @ {video_fps} FPS")
     return True
@@ -4275,11 +4411,18 @@ def start_video_playback(video_path):
 def stop_video_playback():
     """Zatrzymaj odtwarzanie"""
     global video_capture, current_state, video_path_playing, video_last_surface
-    
+
     if video_capture:
         video_capture.release()
         video_capture = None
-    
+
+    # NAPRAWIONE: Zatrzymaj dźwięk
+    try:
+        pygame.mixer.music.stop()
+        print("[AUDIO] Zatrzymano dźwięk")
+    except:
+        pass
+
     video_path_playing = None
     video_last_surface = None
     current_state = STATE_VIDEOS
@@ -4290,6 +4433,19 @@ def toggle_pause():
     """Przełącz pauzę"""
     global video_paused, video_last_frame_time
     video_paused = not video_paused
+
+    # NAPRAWIONE: Pauzuj/wznów dźwięk
+    try:
+        if video_paused:
+            pygame.mixer.music.pause()
+            print("[AUDIO] Zapauzowano dźwięk")
+        else:
+            pygame.mixer.music.unpause()
+            video_last_frame_time = time.time()
+            print("[AUDIO] Wznowiono dźwięk")
+    except:
+        pass
+
     if not video_paused:
         video_last_frame_time = time.time()
     print(f"{'[PAUSE] Pauza' if video_paused else '[PLAY] Wznowiono'}")
@@ -4369,10 +4525,12 @@ def draw_main_screen(frame):
     draw_battery_icon()
     draw_zoom_indicator()  # Wskaźnik zoomu zawsze widoczny
 
+    # NAPRAWIONE: Wskaźnik mikrofonu pokazuj PODCZAS nagrywania
+    draw_audio_level_indicator()  # Wskaźnik mikrofonu - funkcja sama sprawdza czy nagrywamy
+
     # Ukryj elementy UI podczas nagrywania
     if not recording:
         draw_menu_button()
-        draw_audio_level_indicator()  # Wskaźnik mikrofonu nad P-MENU
         # draw_text("Record: START/STOP | Videos: Menu | Menu: Ustawienia | +/-: Zoom",
                 #  font_tiny, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30, center=True, bg_color=BLACK, padding=8)
 
@@ -5416,9 +5574,21 @@ def cleanup(signum=None, frame=None):
     if video_capture:
         video_capture.release()
 
+    # NAPRAWIONE: Zatrzymaj pygame.mixer
+    try:
+        pygame.mixer.music.stop()
+        pygame.mixer.quit()
+        print("[OK] Mixer cleanup OK")
+    except:
+        pass
+
     # Zatrzymaj nagrywanie audio jeśli aktywne
     if audio_recording:
         stop_audio_recording()
+
+    # NOWY: Zatrzymaj monitoring audio
+    if audio_monitoring_active:
+        stop_audio_monitoring()
 
     # Zamknij PyAudio
     if audio:
@@ -5470,6 +5640,9 @@ if __name__ == '__main__':
     audio_ok = init_audio()
     if audio_ok:
         print(f"[OK] Audio zainicjalizowane - device_index: {audio_device_index}")
+
+        # NOWY: Uruchom ciągły monitoring poziomu audio
+        start_audio_monitoring()
     else:
         print("[WARN] Audio nie zainicjalizowane - aplikacja będzie działać bez dźwięku")
     print("="*70 + "\n")
