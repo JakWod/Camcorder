@@ -3399,7 +3399,9 @@ def draw_battery_icon():
     segment_y = battery_y + 5  # Margines od góry
 
     # Pobierz poziom baterii i oblicz ile segmentów pokazać
-    battery_level = get_battery_level()
+    # NAPRAWIONE: Użyj battery_max_displayed_level zamiast surowego poziomu
+    # aby uniknąć migotania segmentów przy wahaniach napięcia
+    battery_level = battery_max_displayed_level
     if battery_level >= 75:
         segments_to_draw = 4
     elif battery_level >= 50:
