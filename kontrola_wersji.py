@@ -108,13 +108,14 @@ audio_recording = False
 audio_file = None
 audio_thread = None
 audio_level = 0.0  # Aktualny poziom głośności (0.0 - 1.0)
+audio_level_right = 0.0
 audio_device_index = None
 audio_monitoring_stream = None  # NOWY: Stream do ciągłego monitoringu poziomu
 audio_monitoring_thread = None  # NOWY: Wątek monitorujący poziom audio
 audio_monitoring_active = False  # NOWY: Czy monitoring jest aktywny
 AUDIO_CHUNK = 1024
 AUDIO_FORMAT = pyaudio.paInt16
-AUDIO_CHANNELS = 1
+AUDIO_CHANNELS = 2
 AUDIO_RATE = 44100
 
 # INA219 Battery Monitor
@@ -735,32 +736,41 @@ def init_audio():
 
 
 def calculate_audio_level(data):
-    """Oblicz poziom głośności z danych audio (RMS)"""
+    """Oblicz poziom głośności z danych audio (RMS) dla dwóch kanałów)"""
     try:
         # Konwertuj bajty na wartości int16
         audio_data = np.frombuffer(data, dtype=np.int16)
 
-        # Oblicz RMS (Root Mean Square) - użyj float64 aby uniknąć overflow
-        mean_square = np.mean(audio_data.astype(np.float64)**2)
+        # Dane są przeplatane (L1, R1, L2, R2, ...)
+        # Oddziel kanał lewy (indeksy parzyste: 0, 2, 4, ...)
+        audio_data_left = audio_data[0::2].astype(np.float64)
+        # Oddziel kanał prawy (indeksy nieparzyste: 1, 3, 5, ...)
+        audio_data_right = audio_data[1::2].astype(np.float64)
 
-        # Sprawdź czy wartość jest poprawna przed sqrt
-        if np.isnan(mean_square) or np.isinf(mean_square) or mean_square < 0:
-            return 0.0
+        # Oblicz RMS (Root Mean Square) dla kanału L
+        mean_square_left = np.mean(audio_data_left**2)
+        rms_left = np.sqrt(mean_square_left) if mean_square_left >= 0 else 0.0
 
-        rms = np.sqrt(mean_square)
+        # Oblicz RMS dla kanału R
+        mean_square_right = np.mean(audio_data_right**2)
+        rms_right = np.sqrt(mean_square_right) if mean_square_right >= 0 else 0.0
 
-        # Normalizuj do zakresu 0.0 - 1.0
-        # Maksymalna wartość dla int16 to 32768
-        normalized = min(1.0, rms / 32768.0)
+        # Normalizuj do zakresu 0.0 - 1.0 (max int16 to 32768)
+        normalized_left = min(1.0, rms_left / 32768.0)
+        normalized_right = min(1.0, rms_right / 32768.0)
 
-        # Zastosuj nieliniową skalę (logarytmiczną) dla lepszej wizualizacji
-        if normalized > 0:
-            normalized = min(1.0, normalized * 10)  # Wzmocnienie dla małych dźwięków
+        # Zastosuj nieliniową skalę (logarytmiczną) dla lepszej wizualizacji (jak wcześniej)
+        if normalized_left > 0:
+            normalized_left = min(1.0, normalized_left * 10)
+        if normalized_right > 0:
+            normalized_right = min(1.0, normalized_right * 10)
 
-        return normalized
+        # Zwróć poziomy dla obu kanałów
+        return normalized_left, normalized_right
 
     except Exception as e:
-        return 0.0
+        # W przypadku błędu zwróć 0.0 dla obu
+        return 0.0, 0.0
 
 
 def audio_monitoring_loop():
@@ -809,10 +819,11 @@ def audio_monitoring_loop():
                 data = audio_monitoring_stream.read(AUDIO_CHUNK, exception_on_overflow=False)
 
                 # Oblicz poziom głośności
-                level = calculate_audio_level(data)
+                level_left, level_right = calculate_audio_level(data) # ZMIANA: odbierz dwa poziomy
 
                 # Thread-safe update zmiennej globalnej
-                globals()['audio_level'] = level
+                globals()['audio_level'] = level_left           # ZMIANA
+                globals()['audio_level_right'] = level_right    # NOWY
 
             except Exception as e:
                 # Ignoruj błędy odczytu (przepełnienie bufora itp.)
@@ -932,15 +943,16 @@ def audio_recording_thread(audio_filepath):
                 wf.writeframes(data)
 
                 # NAPRAWIONE: Oblicz poziom głośności i zapisz w zmiennej globalnej
-                level = calculate_audio_level(data)
+                level_left, level_right = calculate_audio_level(data) # ZMIANA: odbierz dwa poziomy
 
                 # Thread-safe update zmiennej globalnej
-                globals()['audio_level'] = level
+                globals()['audio_level'] = level_left           # ZMIANA
+                globals()['audio_level_right'] = level_right    # NOWY
 
                 frame_count += 1
                 # Co sekundę wypisz diagnostykę
                 if frame_count % 43 == 0:  # ~1 sekunda przy 44100Hz / 1024
-                    print(f"[AUDIO] Nagrywanie... poziom: {level:.3f}")
+                    print(f"[AUDIO] Nagrywanie... poziom L/R: {level_left:.3f}/{level_right:.3f}") # ZMIANA: diagnostyka L/R
 
             except Exception as e:
                 print(f"[WARN] Błąd odczytu audio: {e}")
@@ -998,10 +1010,11 @@ def start_audio_recording(video_filepath):
 
 def stop_audio_recording():
     """Zatrzymaj nagrywanie audio"""
-    global audio_recording, audio_thread, audio_level
+    global audio_recording, audio_thread, audio_level, audio_level_right # ZMIANA: dodaj audio_level_right
 
     audio_recording = False
     audio_level = 0.0
+    audio_level_right = 0.0 # NOWY: reset prawego kanału
 
     # Poczekaj na zakończenie wątku
     if audio_thread and audio_thread.is_alive():
@@ -1073,44 +1086,87 @@ def merge_audio_video(video_path, audio_path):
 
 
 def draw_audio_level_indicator():
-    """Rysuj wskaźnik poziomu głośności nad przyciskiem P-MENU"""
-    # NAPRAWIONE: Rysuj wskaźnik ZAWSZE na ekranie głównym (nie tylko podczas nagrywania)
+    """Rysuj wskaźnik poziomu głośności (L/R) nad przyciskiem P-MENU"""
     if not audio or current_state != STATE_MAIN:
         return
+
+    # Poziomy audio z globalnych zmiennych
+    level_left = globals().get('audio_level', 0.0)
+    level_right = globals().get('audio_level_right', 0.0)
+    
+    # Wskaźnik ma dwa paski - lewy i prawy
+    indicator_count = 2 
 
     # Pozycja nad przyciskiem P-MENU (lewy dolny róg)
     button_x = 20
     button_width = 220
     indicator_width = button_width
-    indicator_height = 25
+    indicator_height_total = 45 # Zwiększona wysokość, aby pomieścić dwa paski
     indicator_x = button_x
-    indicator_y = SCREEN_HEIGHT - 75 - indicator_height - 15  # 15px nad przyciskiem
+    indicator_y = SCREEN_HEIGHT - 75 - indicator_height_total - 15  # 15px nad przyciskiem
+    
+    bar_spacing = 5 # Odstęp między paskami
+    single_bar_height = (indicator_height_total - bar_spacing) // indicator_count # Wysokość pojedynczego paska
 
     # Tło wskaźnika - czarne z białą ramką
-    pygame.draw.rect(screen, BLACK, (indicator_x, indicator_y, indicator_width, indicator_height), border_radius=5)
-    pygame.draw.rect(screen, WHITE, (indicator_x, indicator_y, indicator_width, indicator_height), 2, border_radius=5)
+    pygame.draw.rect(screen, BLACK, (indicator_x, indicator_y, indicator_width, indicator_height_total), border_radius=5)
+    pygame.draw.rect(screen, WHITE, (indicator_x, indicator_y, indicator_width, indicator_height_total), 2, border_radius=5)
+    
+    # Próg aktywacji (zielone MIC)
+    is_active = level_left > 0.01 or level_right > 0.01
 
-    # Pasek poziomu - zielony gdy jest dźwięk
-    if audio_level > 0.01:  # Próg szumu
-        bar_width = int((indicator_width - 8) * audio_level)
+    # --- Pasek lewy (L) ---
+    bar_y_left = indicator_y + 4 
+    
+    # Pasek poziomu L - zielony gdy jest dźwięk
+    if level_left > 0.01:
+        bar_width_left = int((indicator_width - 8) * level_left)
 
         # Kolor w zależności od poziomu (zielony -> żółty -> czerwony)
-        if audio_level < 0.6:
-            bar_color = GREEN
-        elif audio_level < 0.85:
-            bar_color = YELLOW
+        if level_left < 0.6:
+            bar_color_left = GREEN
+        elif level_left < 0.85:
+            bar_color_left = YELLOW
         else:
-            bar_color = RED
+            bar_color_left = RED
 
-        if bar_width > 0:
-            pygame.draw.rect(screen, bar_color,
-                           (indicator_x + 4, indicator_y + 4, bar_width, indicator_height - 8),
+        if bar_width_left > 0:
+            pygame.draw.rect(screen, bar_color_left,
+                           (indicator_x + 4, bar_y_left, bar_width_left, single_bar_height - 2), # -2 na margines
                            border_radius=3)
+                           
+    # Etykieta kanału L
+    draw_text("L", font_tiny, WHITE, indicator_x + 10, bar_y_left + single_bar_height // 2 - 5)
 
-    # Ikona mikrofonu po lewej stronie
+
+    # --- Pasek prawy (R) ---
+    bar_y_right = indicator_y + single_bar_height + bar_spacing
+    
+    # Pasek poziomu R - zielony gdy jest dźwięk
+    if level_right > 0.01:
+        bar_width_right = int((indicator_width - 8) * level_right)
+
+        # Kolor w zależności od poziomu (zielony -> żółty -> czerwony)
+        if level_right < 0.6:
+            bar_color_right = GREEN
+        elif level_right < 0.85:
+            bar_color_right = YELLOW
+        else:
+            bar_color_right = RED
+
+        if bar_width_right > 0:
+            pygame.draw.rect(screen, bar_color_right,
+                           (indicator_x + 4, bar_y_right, bar_width_right, single_bar_height - 2), # -2 na margines
+                           border_radius=3)
+                           
+    # Etykieta kanału R
+    draw_text("R", font_tiny, WHITE, indicator_x + 10, bar_y_right + single_bar_height // 2 - 5)
+
+    # Ikona mikrofonu po prawej stronie (wyśrodkowana)
     mic_text = "MIC"
-    mic_color = GREEN if audio_level > 0.01 else GRAY
-    draw_text(mic_text, font_tiny, mic_color, indicator_x + 15, indicator_y + indicator_height // 2 - 5)
+    mic_color = GREEN if is_active else GRAY
+    # Rysuj obok wskaźników
+    draw_text(mic_text, font_tiny, mic_color, indicator_x + indicator_width - 40, indicator_y + indicator_height_total // 2 - 5)
 
 
 # ============================================================================
