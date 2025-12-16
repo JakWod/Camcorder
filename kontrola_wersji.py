@@ -164,6 +164,7 @@ font_small = None
 font_mediumXL = None
 font_tiny = None
 menu_font = None
+font_70 = None
 SCREEN_WIDTH = 0
 SCREEN_HEIGHT = 0
 playback_icon = None  # Obrazek ikony playback
@@ -1086,87 +1087,87 @@ def merge_audio_video(video_path, audio_path):
 
 
 def draw_audio_level_indicator():
-    """Rysuj wskaźnik poziomu głośności (L/R) nad przyciskiem P-MENU"""
+    """Rysuj wskaźnik poziomu głośności - styl VU meter z 48K, CH1/CH2 i segmentami"""
     if not audio or current_state != STATE_MAIN:
         return
 
     # Poziomy audio z globalnych zmiennych
     level_left = globals().get('audio_level', 0.0)
     level_right = globals().get('audio_level_right', 0.0)
-    
-    # Wskaźnik ma dwa paski - lewy i prawy
-    indicator_count = 2 
 
     # Pozycja nad przyciskiem P-MENU (lewy dolny róg)
     button_x = 20
-    button_width = 220
-    indicator_width = button_width
-    indicator_height_total = 45 # Zwiększona wysokość, aby pomieścić dwa paski
+    indicator_height_total = 80  # Zwiększone z 50 na 80
     indicator_x = button_x
     indicator_y = SCREEN_HEIGHT - 75 - indicator_height_total - 15  # 15px nad przyciskiem
-    
-    bar_spacing = 5 # Odstęp między paskami
-    single_bar_height = (indicator_height_total - bar_spacing) // indicator_count # Wysokość pojedynczego paska
 
-    # Tło wskaźnika - czarne z białą ramką
-    pygame.draw.rect(screen, BLACK, (indicator_x, indicator_y, indicator_width, indicator_height_total), border_radius=5)
-    pygame.draw.rect(screen, WHITE, (indicator_x, indicator_y, indicator_width, indicator_height_total), 2, border_radius=5)
-    
-    # Próg aktywacji (zielone MIC)
-    is_active = level_left > 0.01 or level_right > 0.01
+    # Styl segmentowy - 15 segmentów na kanał (10 białych + 3 pomarańczowe + 2 czerwone)
+    segment_count = 15
+    segment_width = 20  # Zwiększone - dłuższe
+    segment_height = 14  # Zmniejszone - mniej wysokie
+    segment_spacing = 3  # Zwiększone z 2 na 3
 
-    # --- Pasek lewy (L) ---
-    bar_y_left = indicator_y + 4 
-    
-    # Pasek poziomu L - zielony gdy jest dźwięk
-    if level_left > 0.01:
-        bar_width_left = int((indicator_width - 8) * level_left)
+    # --- Napis "ALC" nad wskaźnikiem, wyrównany do lewej ---
+    alc_x = indicator_x + 8
+    alc_y = indicator_y - 25  # Nad wskaźnikiem
+    draw_text_with_outline("ALC", font_large, WHITE, BLACK, alc_x, alc_y)
 
-        # Kolor w zależności od poziomu (zielony -> żółty -> czerwony)
-        if level_left < 0.6:
-            bar_color_left = GREEN
-        elif level_left < 0.85:
-            bar_color_left = YELLOW
+    # --- "48K" label na początku (z czarnym outline, czcionka 70) ---
+    label_48k_x = indicator_x + 8
+    label_48k_y = indicator_y + indicator_height_total // 2 - 10
+    draw_text_with_outline("48K", font_70, WHITE, BLACK, label_48k_x, label_48k_y)
+
+    # --- "CH1" i "CH2" labels (stacked) - przesunięte o 10px w prawo, z czarnym outline ---
+    ch_labels_x = label_48k_x + 35 + 65  # Na prawo od 48K
+    ch1_y = indicator_y + 30
+    ch2_y = indicator_y + indicator_height_total - 26
+    draw_text_with_outline("CH1", font_small, WHITE, BLACK, ch_labels_x, ch1_y)
+    draw_text_with_outline("CH2", font_small, WHITE, BLACK, ch_labels_x, ch2_y)
+
+    # --- Segmenty dla CH1 (górny rząd) - przesunięte jeszcze bardziej w prawo ---
+    segments_start_x = ch_labels_x + 28 + 10 + 20  # Dodatkowe 20px przesunięcia
+    bar_y_ch1 = ch1_y + 2
+    active_segments_left = int(level_left * segment_count)
+
+    for i in range(segment_count):
+        segment_x = segments_start_x + i * (segment_width + segment_spacing)
+
+        # Kolor segmentu: 10 białych (przyciemniony->zielony), 3 pomarańczowe (przyciemniony->intensywny), 2 czerwone (przyciemniony->intensywny)
+        if i < 10:
+            # Białe segmenty - nieaktywne przyciemnione, aktywne zielone
+            segment_color = GREEN if i < active_segments_left else (80, 80, 80)  # Przyciemniony biały
+        elif i < 13:
+            # Pomarańczowe segmenty - nieaktywne przyciemnione, aktywne intensywne
+            segment_color = ORANGE if i < active_segments_left else (100, 65, 0)  # Przyciemniony pomarańczowy
         else:
-            bar_color_left = RED
+            # Czerwone segmenty - nieaktywne przyciemnione, aktywne intensywne
+            segment_color = RED if i < active_segments_left else (100, 0, 0)  # Przyciemniony czerwony
 
-        if bar_width_left > 0:
-            pygame.draw.rect(screen, bar_color_left,
-                           (indicator_x + 4, bar_y_left, bar_width_left, single_bar_height - 2), # -2 na margines
-                           border_radius=3)
-                           
-    # Etykieta kanału L
-    draw_text("L", font_tiny, WHITE, indicator_x + 10, bar_y_left + single_bar_height // 2 - 5)
+        # Rysuj segment z czarnym outlinem
+        pygame.draw.rect(screen, segment_color, (segment_x, bar_y_ch1, segment_width, segment_height))
+        pygame.draw.rect(screen, BLACK, (segment_x, bar_y_ch1, segment_width, segment_height), 1)
 
+    # --- Segmenty dla CH2 (dolny rząd) ---
+    bar_y_ch2 = ch2_y + 2
+    active_segments_right = int(level_right * segment_count)
 
-    # --- Pasek prawy (R) ---
-    bar_y_right = indicator_y + single_bar_height + bar_spacing
-    
-    # Pasek poziomu R - zielony gdy jest dźwięk
-    if level_right > 0.01:
-        bar_width_right = int((indicator_width - 8) * level_right)
+    for i in range(segment_count):
+        segment_x = segments_start_x + i * (segment_width + segment_spacing)
 
-        # Kolor w zależności od poziomu (zielony -> żółty -> czerwony)
-        if level_right < 0.6:
-            bar_color_right = GREEN
-        elif level_right < 0.85:
-            bar_color_right = YELLOW
+        # Kolor segmentu: 10 białych (przyciemniony->zielony), 3 pomarańczowe (przyciemniony->intensywny), 2 czerwone (przyciemniony->intensywny)
+        if i < 10:
+            # Białe segmenty - nieaktywne przyciemnione, aktywne zielone
+            segment_color = GREEN if i < active_segments_right else (80, 80, 80)  # Przyciemniony biały
+        elif i < 13:
+            # Pomarańczowe segmenty - nieaktywne przyciemnione, aktywne intensywne
+            segment_color = ORANGE if i < active_segments_right else (100, 65, 0)  # Przyciemniony pomarańczowy
         else:
-            bar_color_right = RED
+            # Czerwone segmenty - nieaktywne przyciemnione, aktywne intensywne
+            segment_color = RED if i < active_segments_right else (100, 0, 0)  # Przyciemniony czerwony
 
-        if bar_width_right > 0:
-            pygame.draw.rect(screen, bar_color_right,
-                           (indicator_x + 4, bar_y_right, bar_width_right, single_bar_height - 2), # -2 na margines
-                           border_radius=3)
-                           
-    # Etykieta kanału R
-    draw_text("R", font_tiny, WHITE, indicator_x + 10, bar_y_right + single_bar_height // 2 - 5)
-
-    # Ikona mikrofonu po prawej stronie (wyśrodkowana)
-    mic_text = "MIC"
-    mic_color = GREEN if is_active else GRAY
-    # Rysuj obok wskaźników
-    draw_text(mic_text, font_tiny, mic_color, indicator_x + indicator_width - 40, indicator_y + indicator_height_total // 2 - 5)
+        # Rysuj segment z czarnym outlinem
+        pygame.draw.rect(screen, segment_color, (segment_x, bar_y_ch2, segment_width, segment_height))
+        pygame.draw.rect(screen, BLACK, (segment_x, bar_y_ch2, segment_width, segment_height), 1)
 
 
 # ============================================================================
@@ -4060,7 +4061,7 @@ def videos_navigate_right():
 
 def load_fonts():
     """Załaduj wszystkie czcionki na podstawie wybranej font_family"""
-    global font_large, font_medium, font_small, font_tiny, menu_font, font_mediumXL
+    global font_large, font_medium, font_small, font_tiny, menu_font, font_mediumXL, font_70
 
     font_family = camera_settings.get("font_family", "HomeVideo")
 
@@ -4080,6 +4081,7 @@ def load_fonts():
         font_tiny = pygame.font.Font(font_path, int(24 * font_scale))
         menu_font = pygame.font.Font(font_path, int(65 * font_scale))
         font_mediumXL = pygame.font.Font(font_path, int(55 * font_scale))  # Nowa czcionka dla formatu
+        font_70 = pygame.font.Font(font_path, int(70 * font_scale))  # Czcionka dla 48K w mic indicator
         print(f"[OK] Czcionka załadowana: {font_family}")
     except Exception as e:
         # Jeśli nie udało się załadować, użyj domyślnej czcionki systemowej
@@ -4091,6 +4093,7 @@ def load_fonts():
         font_tiny = pygame.font.Font(None, 24)
         menu_font = pygame.font.Font(None, 65)
         font_mediumXL = pygame.font.Font(None, 55)
+        font_70 = pygame.font.Font(None, 70)
 
 
 def pixelize_image(image, pixel_size=4):
@@ -4594,7 +4597,7 @@ def draw_main_screen(frame):
 
     draw_zoom_bar()
     draw_recording_indicator()
-    draw_sd_indicator()
+    # draw_sd_indicator()
     draw_recording_time_remaining()
 
 
