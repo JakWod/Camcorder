@@ -4454,13 +4454,38 @@ def start_video_playback(video_path):
     video_last_frame_time = time.time()
     video_last_surface = None
 
-    # NAPRAWIONE: Odtwórz dźwięk video używając pygame.mixer
+    # Ekstraktuj audio do tymczasowego pliku WAV dla pygame.mixer
     try:
-        # Sprawdź czy video ma audio track (musi być MP4 z audio)
-        # Pygame mixer może odtwarzać MP4 bezpośrednio
-        pygame.mixer.music.load(str(video_path))
-        pygame.mixer.music.play()
-        print(f"[AUDIO] Odtwarzanie dźwięku z: {video_path.name}")
+        # Ścieżka do tymczasowego pliku audio
+        temp_audio_path = VIDEO_DIR / f"temp_playback_audio_{video_path.stem}.wav"
+
+        # Usuń stary plik tymczasowy jeśli istnieje
+        if temp_audio_path.exists():
+            temp_audio_path.unlink()
+
+        # Użyj ffmpeg do ekstrahowania audio do WAV
+        print(f"[AUDIO] Ekstrakcja audio z MP4...")
+        extract_cmd = [
+            "ffmpeg",
+            "-i", str(video_path),
+            "-vn",  # Bez video
+            "-acodec", "pcm_s16le",  # Kodek WAV
+            "-ar", "44100",  # Sample rate
+            "-ac", "2",  # Stereo
+            "-y",  # Nadpisz jeśli istnieje
+            str(temp_audio_path)
+        ]
+
+        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=10)
+
+        if result.returncode == 0 and temp_audio_path.exists():
+            # Załaduj wyekstrahowany WAV
+            pygame.mixer.music.load(str(temp_audio_path))
+            pygame.mixer.music.play()
+            print(f"[AUDIO] Odtwarzanie dźwięku WAV: {temp_audio_path.name}")
+        else:
+            print(f"[WARN] Nie można wyekstrahować audio: {result.stderr}")
+
     except Exception as e:
         print(f"[WARN] Nie można odtworzyć dźwięku: {e}")
 
@@ -4477,12 +4502,22 @@ def stop_video_playback():
         video_capture.release()
         video_capture = None
 
-    # NAPRAWIONE: Zatrzymaj dźwięk
+    # Zatrzymaj dźwięk
     try:
         pygame.mixer.music.stop()
         print("[AUDIO] Zatrzymano dźwięk")
     except:
         pass
+
+    # Usuń tymczasowy plik audio jeśli istnieje
+    if video_path_playing:
+        try:
+            temp_audio_path = VIDEO_DIR / f"temp_playback_audio_{video_path_playing.stem}.wav"
+            if temp_audio_path.exists():
+                temp_audio_path.unlink()
+                print(f"[AUDIO] Usunięto tymczasowy plik: {temp_audio_path.name}")
+        except Exception as e:
+            print(f"[WARN] Nie można usunąć pliku tymczasowego: {e}")
 
     video_path_playing = None
     video_last_surface = None
@@ -4537,6 +4572,18 @@ def seek_video(seconds):
             return
 
         video_current_frame = target_frame + 1
+
+        # Synchronizuj audio podczas przewijania
+        try:
+            # Oblicz pozycję w sekundach
+            target_time_seconds = target_frame / video_fps if video_fps > 0 else 0
+
+            # Przewiń audio do odpowiedniej pozycji
+            # pygame.mixer.music.set_pos() przyjmuje czas w sekundach
+            pygame.mixer.music.set_pos(target_time_seconds)
+            print(f"[AUDIO] Przewinięto audio do: {target_time_seconds:.2f}s")
+        except Exception as e:
+            print(f"[WARN] Nie można przewinąć audio: {e}")
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
