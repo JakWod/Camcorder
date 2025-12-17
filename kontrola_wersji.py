@@ -4435,15 +4435,22 @@ def start_video_playback(video_path):
         print("[ERROR] Nie można otworzyć")
         return False
 
-    video_fps = extract_fps_from_filename(video_path.name)
+    original_fps = extract_fps_from_filename(video_path.name)
 
-    if not video_fps:
-        video_fps = video_capture.get(cv2.CAP_PROP_FPS)
-        print(f"[FPS] OpenCV FPS: {video_fps}")
+    if not original_fps:
+        original_fps = video_capture.get(cv2.CAP_PROP_FPS)
+        print(f"[FPS] OpenCV FPS: {original_fps}")
 
-    if video_fps <= 0 or video_fps > 50:
-        video_fps = 30
+    if original_fps <= 0 or original_fps > 50:
+        original_fps = 30
         print(f"[WARN] FPS nieprawidłowy, użyto 30")
+
+    # KONWERSJA: Filmy 50 FPS odtwarzaj jako 30 FPS (dla płynności playbacku)
+    if original_fps > 30:
+        video_fps = 30
+        print(f"[PLAYBACK] Konwersja {original_fps} FPS -> 30 FPS dla odtwarzania")
+    else:
+        video_fps = original_fps
 
     print(f"[OK] UŻYWAM FPS: {video_fps}")
 
@@ -4964,38 +4971,46 @@ def draw_playing_screen():
     if not video_paused:
         current_time = time.time()
         frame_interval = 1.0 / video_fps
+        elapsed = current_time - video_last_frame_time
 
-        if current_time - video_last_frame_time >= frame_interval:
-            ret, frame = video_capture.read()
+        # Oblicz ile klatek powinno zostać wyświetlonych na podstawie czasu
+        frames_to_advance = int(elapsed / frame_interval)
 
-            if ret and frame is not None:
-                try:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if frames_to_advance > 0:
+            for _ in range(frames_to_advance):
+                ret, frame = video_capture.read()
 
-                    video_h, video_w = frame.shape[:2]
-                    aspect = video_w / video_h
-                    screen_aspect = SCREEN_WIDTH / SCREEN_HEIGHT
+                if not ret or frame is None:
+                    stop_video_playback()
+                    return
 
-                    if aspect > screen_aspect:
-                        new_w = SCREEN_WIDTH
-                        new_h = int(SCREEN_WIDTH / aspect)
-                    else:
-                        new_h = SCREEN_HEIGHT
-                        new_w = int(SCREEN_HEIGHT * aspect)
+                if _ == frames_to_advance - 1:  # Tylko ostatnią klatkę rysujemy
+                    try:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                    frame_resized = cv2.resize(frame_rgb, (new_w, new_h))
-                    frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
+                        video_h, video_w = frame.shape[:2]
+                        aspect = video_w / video_h
+                        screen_aspect = SCREEN_WIDTH / SCREEN_HEIGHT
 
-                    video_last_surface = (frame_surface, new_w, new_h)
+                        if aspect > screen_aspect:
+                            new_w = SCREEN_WIDTH
+                            new_h = int(SCREEN_WIDTH / aspect)
+                        else:
+                            new_h = SCREEN_HEIGHT
+                            new_w = int(SCREEN_HEIGHT * aspect)
 
-                except Exception as e:
-                    print(f"[WARN] Błąd klatki: {e}")
+                        frame_resized = cv2.resize(frame_rgb, (new_w, new_h))
+                        frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
+
+                        video_last_surface = (frame_surface, new_w, new_h)
+
+                    except Exception as e:
+                        print(f"[WARN] Błąd klatki: {e}")
 
                 video_current_frame += 1
-                video_last_frame_time = current_time
-            else:
-                stop_video_playback()
-                return
+
+            # Zaktualizuj czas bazowy - dodaj dokładny czas ramek, nie aktualny czas
+            video_last_frame_time += frames_to_advance * frame_interval
 
     screen.fill(BLACK)
     if video_last_surface:
