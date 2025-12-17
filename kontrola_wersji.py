@@ -225,6 +225,8 @@ camera_settings = {
     "zoom": 0.0,
     "show_grid": True,
     "font_family": "HomeVideo",
+    "audio_recording": True,  # NOWY: Włącz/wyłącz nagrywanie dźwięku
+    "show_center_frame": True,  # NOWY: Pokaż ramkę środkową
 }
 
 # Opcje
@@ -992,6 +994,11 @@ def start_audio_recording(video_filepath):
     """Rozpocznij nagrywanie audio"""
     global audio_recording, audio_thread, audio_file, audio_level
 
+    # Sprawdź czy nagrywanie dźwięku jest włączone w ustawieniach
+    if not camera_settings.get("audio_recording", True):
+        print("[AUDIO] Nagrywanie dźwięku wyłączone w ustawieniach")
+        return None
+
     if not audio:
         print("[WARN] Audio nie zainicjalizowane")
         return None
@@ -1542,6 +1549,20 @@ def init_menu_tiles():
             "id": "grid",
             "label": "Siatka pomocnicza",
             "value": lambda: "WŁ." if camera_settings.get("show_grid", False) else "WYŁ.",
+            "icon": "[VIDEO]",
+            "section": "Image Quality/Size"
+        },
+        {
+            "id": "center_frame",
+            "label": "Ramka środkowa",
+            "value": lambda: "WŁ." if camera_settings.get("show_center_frame", True) else "WYŁ.",
+            "icon": "[VIDEO]",
+            "section": "Image Quality/Size"
+        },
+        {
+            "id": "audio_rec",
+            "label": "Nagrywanie dźwięku",
+            "value": lambda: "WŁ." if camera_settings.get("audio_recording", True) else "WYŁ.",
             "icon": "[VIDEO]",
             "section": "Image Quality/Size"
         },
@@ -3272,25 +3293,93 @@ def draw_grid_overlay():
     """Rysuj siatkę 3x3"""
     if not camera_settings.get("show_grid", True):
         return
-    
+
     x1 = SCREEN_WIDTH // 3
     x2 = 2 * SCREEN_WIDTH // 3
-    
+
     y1 = SCREEN_HEIGHT // 3
     y2 = 2 * SCREEN_HEIGHT // 3
-    
+
     grid_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-    
+
     line_color = (255, 255, 255, 80)
     line_width = 2
-    
+
     pygame.draw.line(grid_surface, line_color, (x1, 0), (x1, SCREEN_HEIGHT), line_width)
     pygame.draw.line(grid_surface, line_color, (x2, 0), (x2, SCREEN_HEIGHT), line_width)
-    
+
     pygame.draw.line(grid_surface, line_color, (0, y1), (SCREEN_WIDTH, y1), line_width)
     pygame.draw.line(grid_surface, line_color, (0, y2), (SCREEN_WIDTH, y2), line_width)
-    
+
     screen.blit(grid_surface, (0, 0))
+
+
+def draw_center_frame():
+    """Rysuj ramkę środkową - dwa prostokąty z przerwą pośrodku"""
+    if not camera_settings.get("show_center_frame", True):
+        return
+
+    # Wymiary ramki - znacznie mniejsza, proporcje 16:9 wycentrowane na ekranie
+    frame_width = SCREEN_WIDTH // 6  # 1/6 szerokości ekranu (mniejsza)
+    frame_height = int(frame_width * 9 / 16)  # Proporcje 16:9
+
+    # Pozycja - wyśrodkowana
+    frame_x = (SCREEN_WIDTH - frame_width) // 2
+    frame_y = (SCREEN_HEIGHT - frame_height) // 2
+
+    frame_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+
+    line_color = (255, 255, 255, 120)  # Biały z alpha
+    line_width = 3
+
+    # Większa szerokość przerwy pośrodku
+    gap_width = 30
+
+    # Środek ekranu
+    center_x = SCREEN_WIDTH // 2
+
+    # Lewy prostokąt (od frame_x do środka minus połowa przerwy)
+    left_rect_width = (frame_width // 2) - (gap_width // 2)
+
+    # Rysuj lewy prostokąt BEZ prawej krawędzi (rysujemy linie osobno)
+    # Górna krawędź
+    pygame.draw.line(frame_surface, line_color,
+                     (frame_x, frame_y),
+                     (frame_x + left_rect_width, frame_y),
+                     line_width)
+    # Dolna krawędź
+    pygame.draw.line(frame_surface, line_color,
+                     (frame_x, frame_y + frame_height),
+                     (frame_x + left_rect_width, frame_y + frame_height),
+                     line_width)
+    # Lewa krawędź
+    pygame.draw.line(frame_surface, line_color,
+                     (frame_x, frame_y),
+                     (frame_x, frame_y + frame_height),
+                     line_width)
+
+    # Prawy prostokąt (od środka plus połowa przerwy do końca ramki)
+    right_rect_x = center_x + (gap_width // 2)
+    right_rect_width = (frame_x + frame_width) - right_rect_x
+
+    # Rysuj prawy prostokąt BEZ lewej krawędzi (rysujemy linie osobno)
+    # Górna krawędź
+    pygame.draw.line(frame_surface, line_color,
+                     (right_rect_x, frame_y),
+                     (right_rect_x + right_rect_width, frame_y),
+                     line_width)
+    # Dolna krawędź
+    pygame.draw.line(frame_surface, line_color,
+                     (right_rect_x, frame_y + frame_height),
+                     (right_rect_x + right_rect_width, frame_y + frame_height),
+                     line_width)
+    # Prawa krawędź
+    pygame.draw.line(frame_surface, line_color,
+                     (right_rect_x + right_rect_width, frame_y),
+                     (right_rect_x + right_rect_width, frame_y + frame_height),
+                     line_width)
+
+    screen.blit(frame_surface, (0, 0))
 
 
 def get_battery_level():
@@ -4370,42 +4459,48 @@ def stop_recording():
             camera.stop_encoder()
             print("[OK] Encoder zatrzymany")
 
-            time.sleep(1.5)
+            # Przetwarzanie wideo w wątku w tle (nie blokuj głównego wątku)
+            def process_video():
+                try:
+                    # Czekaj aż plik będzie gotowy
+                    time.sleep(1.5)
 
-            if saved_file and saved_file.exists():
-                size = saved_file.stat().st_size / (1024*1024)
+                    if saved_file and saved_file.exists():
+                        size = saved_file.stat().st_size / (1024*1024)
 
-                if size < 0.1:
-                    print(f"[WARN] Plik zbyt mały ({size:.1f} MB)")
-                else:
-                    print(f"[OK] Zapisano: {size:.1f} MB @ {saved_fps} FPS")
+                        if size < 0.1:
+                            print(f"[WARN] Plik zbyt mały ({size:.1f} MB)")
+                        else:
+                            print(f"[OK] Zapisano: {size:.1f} MB @ {saved_fps} FPS")
 
-                    verify_cap = cv2.VideoCapture(str(saved_file))
-                    recorded_fps = verify_cap.get(cv2.CAP_PROP_FPS)
-                    verify_cap.release()
-                    print(f"[FPS] OpenCV wykrył FPS: {recorded_fps:.2f}")
+                            verify_cap = cv2.VideoCapture(str(saved_file))
+                            recorded_fps = verify_cap.get(cv2.CAP_PROP_FPS)
+                            verify_cap.release()
+                            print(f"[FPS] OpenCV wykrył FPS: {recorded_fps:.2f}")
 
-                    print("[THUMB] Generowanie miniatury...")
-                    generate_thumbnail(saved_file)
+                            print("[THUMB] Generowanie miniatury...")
+                            generate_thumbnail(saved_file)
 
-                    # Przetwarzanie wideo w wątku
-                    def process_video():
-                        # Połącz audio i video
-                        if saved_audio_file and saved_audio_file.exists():
-                            print("[MERGE] Łączenie audio z video...")
-                            merge_audio_video(saved_file, saved_audio_file)
+                            # Połącz audio i video
+                            if saved_audio_file and saved_audio_file.exists():
+                                print("[MERGE] Łączenie audio z video...")
+                                merge_audio_video(saved_file, saved_audio_file)
 
-                        # Dodaj datę jeśli włączona
-                        if camera_settings.get("show_date", False):
-                            print("[DATE] Dodawanie daty...")
-                            add_date_overlay_to_video(saved_file)
+                            # Dodaj datę jeśli włączona
+                            if camera_settings.get("show_date", False):
+                                print("[DATE] Dodawanie daty...")
+                                add_date_overlay_to_video(saved_file)
 
-                        print("[OK] Przetwarzanie zakończone")
+                            print("[OK] Przetwarzanie zakończone")
+                    else:
+                        print(f"[ERROR] Plik nie istnieje")
+                except Exception as e:
+                    print(f"[ERROR] Błąd przetwarzania wideo: {e}")
+                    import traceback
+                    traceback.print_exc()
 
-                    thread = threading.Thread(target=process_video, daemon=True)
-                    thread.start()
-            else:
-                print(f"[ERROR] Plik nie istnieje")
+            thread = threading.Thread(target=process_video, daemon=True)
+            thread.start()
 
         except Exception as e:
             print(f"[ERROR] Błąd: {e}")
@@ -4435,24 +4530,78 @@ def start_video_playback(video_path):
         print("[ERROR] Nie można otworzyć")
         return False
 
+    # Najpierw spróbuj wyciągnąć FPS z nazwy pliku (najniezawodniejsze)
     original_fps = extract_fps_from_filename(video_path.name)
 
+    # Jeśli nie ma w nazwie, użyj ffprobe (dokładniejsze niż OpenCV)
     if not original_fps:
-        original_fps = video_capture.get(cv2.CAP_PROP_FPS)
-        print(f"[FPS] OpenCV FPS: {original_fps}")
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=r_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1",
+                 str(video_path)],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # ffprobe zwraca FPS jako ułamek (np. "30/1" lub "50/1")
+                fps_str = result.stdout.strip()
+                if '/' in fps_str:
+                    num, denom = fps_str.split('/')
+                    original_fps = float(num) / float(denom)
+                else:
+                    original_fps = float(fps_str)
+                print(f"[FPS] ffprobe FPS: {original_fps}")
+        except Exception as e:
+            print(f"[WARN] Błąd ffprobe: {e}")
 
-    if original_fps <= 0 or original_fps > 50:
+    # Jeśli ffprobe też zawiodło, użyj OpenCV jako ostateczność
+    if not original_fps or original_fps <= 0:
+        original_fps = video_capture.get(cv2.CAP_PROP_FPS)
+        print(f"[FPS] OpenCV FPS (fallback): {original_fps}")
+
+    # Walidacja FPS
+    if original_fps <= 0 or original_fps > 60:
         original_fps = 30
         print(f"[WARN] FPS nieprawidłowy, użyto 30")
 
-    # KONWERSJA: Filmy 50 FPS odtwarzaj jako 30 FPS (dla płynności playbacku)
-    if original_fps > 30:
-        video_fps = 30
-        print(f"[PLAYBACK] Konwersja {original_fps} FPS -> 30 FPS dla odtwarzania")
+    # NAPRAWIONE: Oblicz prawdziwy FPS z długości wideo i liczby klatek
+    # Niektóre filmy mają nieprawidłowe metadane FPS, więc sprawdzamy rzeczywisty FPS
+    video_total_frames_temp = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Pobierz rzeczywisty czas trwania wideo z ffprobe
+    calculated_fps = None
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            duration_seconds = float(result.stdout.strip())
+            if duration_seconds > 0 and video_total_frames_temp > 0:
+                calculated_fps = video_total_frames_temp / duration_seconds
+                print(f"[FPS] Obliczony FPS (klatki/czas): {calculated_fps:.2f}")
+    except Exception as e:
+        print(f"[WARN] Nie można obliczyć FPS z czasu trwania: {e}")
+
+    # Diagnostyka - pokaż wszystkie źródła FPS
+    print(f"[FPS] Metadane FPS: {original_fps:.2f}")
+    if calculated_fps:
+        print(f"[FPS] Rzeczywisty FPS: {calculated_fps:.2f}")
+
+        # Jeśli jest duża rozbieżność (>5 FPS), użyj obliczonego FPS
+        fps_diff = abs(original_fps - calculated_fps)
+        if fps_diff > 5:
+            print(f"[FPS] ROZBIEŻNOŚĆ {fps_diff:.1f} FPS! Używam obliczonego FPS")
+            video_fps = calculated_fps
+        else:
+            # Metadane są OK, użyj ich
+            video_fps = original_fps
     else:
+        # Nie udało się obliczyć, użyj metadanych
         video_fps = original_fps
 
-    print(f"[OK] UŻYWAM FPS: {video_fps}")
+    print(f"[OK] UŻYWAM FPS: {video_fps:.2f}")
 
     video_total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     video_current_frame = 0
@@ -4488,8 +4637,10 @@ def start_video_playback(video_path):
         if result.returncode == 0 and temp_audio_path.exists():
             # Załaduj wyekstrahowany WAV
             pygame.mixer.music.load(str(temp_audio_path))
+            # NAPRAWIONE: Ustaw głośność na 100% (1.0)
+            pygame.mixer.music.set_volume(1.0)
             pygame.mixer.music.play()
-            print(f"[AUDIO] Odtwarzanie dźwięku WAV: {temp_audio_path.name}")
+            print(f"[AUDIO] Odtwarzanie dźwięku WAV: {temp_audio_path.name} (głośność: 100%)")
         else:
             print(f"[WARN] Nie można wyekstrahować audio: {result.stderr}")
 
@@ -4625,7 +4776,7 @@ def seek_video(seconds):
 def draw_main_screen(frame):
     """Ekran główny"""
     screen.fill(BLACK)
-    
+
     if frame is not None:
         try:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -4634,8 +4785,9 @@ def draw_main_screen(frame):
             screen.blit(frame_surface, (0, 0))
         except:
             draw_text("[CAM] Kamera", font_large, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
-    
+
     draw_grid_overlay()
+    draw_center_frame()  # NOWY: Ramka środkowa
     draw_date_overlay()
     draw_battery_icon()
     draw_zoom_indicator()  # Wskaźnik zoomu zawsze widoczny
@@ -5171,9 +5323,10 @@ def handle_record():
 
 
 def handle_videos():
-    global current_state, selected_videos, multi_select_mode
+    global current_state, selected_videos, multi_select_mode, selected_index
     if current_state == STATE_MAIN and not recording:
         refresh_videos()
+        selected_index = 0  # NAPRAWIONE: Resetuj do pierwszego filmu
         current_state = STATE_VIDEOS
         print("\n[VIDEOS] Menu Videos")
     elif current_state == STATE_VIDEOS:
@@ -5312,11 +5465,13 @@ def handle_ok():
                 tile_id = tile["id"]
 
                 # Toggle dla opcji boolean
-                if tile_id in ["grid", "show_date", "show_time"]:
+                if tile_id in ["grid", "show_date", "show_time", "center_frame", "audio_rec"]:
                     key_map = {
                         "grid": "show_grid",
                         "show_date": "show_date",
-                        "show_time": "show_time"
+                        "show_time": "show_time",
+                        "center_frame": "show_center_frame",
+                        "audio_rec": "audio_recording"
                     }
                     key = key_map[tile_id]
                     camera_settings[key] = not camera_settings.get(key, False)
@@ -5476,7 +5631,10 @@ def handle_up():
             videos_navigate_up()
             last_videos_scroll = current_time
     elif current_state == STATE_PLAYING:
-        print("[VOL] Głośność UP (TBD)")
+        current_volume = pygame.mixer.music.get_volume()
+        new_volume = min(1.0, current_volume + 0.1)
+        pygame.mixer.music.set_volume(new_volume)
+        print(f"[VOL] Głośność UP: {int(new_volume * 100)}%")
     elif current_state == STATE_MENU:
         menu_navigate_up()
     elif current_state == STATE_SUBMENU:
@@ -5497,7 +5655,10 @@ def handle_down():
             videos_navigate_down()
             last_videos_scroll = current_time
     elif current_state == STATE_PLAYING:
-        print("[VOL] Głośność DOWN (TBD)")
+        current_volume = pygame.mixer.music.get_volume()
+        new_volume = max(0.0, current_volume - 0.1)
+        pygame.mixer.music.set_volume(new_volume)
+        print(f"[VOL] Głośność DOWN: {int(new_volume * 100)}%")
     elif current_state == STATE_MENU:
         menu_navigate_down()
     elif current_state == STATE_SUBMENU:
