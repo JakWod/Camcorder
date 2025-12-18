@@ -4731,15 +4731,33 @@ def seek_video(seconds):
 
         video_current_frame = target_frame + 1
 
-        # Synchronizuj audio podczas przewijania
+        # NAPRAWIONE: Synchronizacja audio podczas przewijania
+        # Zatrzymaj audio, załaduj od nowa z dokładnej pozycji
         try:
             # Oblicz pozycję w sekundach
             target_time_seconds = target_frame / video_fps if video_fps > 0 else 0
 
-            # Przewiń audio do odpowiedniej pozycji
-            # pygame.mixer.music.set_pos() przyjmuje czas w sekundach
-            pygame.mixer.music.set_pos(target_time_seconds)
-            print(f"[AUDIO] Przewinięto audio do: {target_time_seconds:.2f}s")
+            # Ścieżka do tymczasowego pliku audio
+            temp_audio_path = VIDEO_DIR / f"temp_playback_audio_{video_path_playing.stem}.wav"
+
+            if temp_audio_path.exists():
+                # Zatrzymaj obecne audio
+                pygame.mixer.music.stop()
+
+                # Załaduj ponownie
+                pygame.mixer.music.load(str(temp_audio_path))
+                pygame.mixer.music.set_volume(1.0)
+
+                # Uruchom z dokładnej pozycji (set_pos PRZED play dla lepszej synchronizacji)
+                pygame.mixer.music.play(start=target_time_seconds)
+
+                # Jeśli było zapauzowane, zapauzuj ponownie
+                if was_paused:
+                    pygame.mixer.music.pause()
+
+                print(f"[AUDIO] Przewinięto audio do: {target_time_seconds:.2f}s")
+            else:
+                print(f"[WARN] Brak pliku audio do przewinięcia")
         except Exception as e:
             print(f"[WARN] Nie można przewinąć audio: {e}")
 
