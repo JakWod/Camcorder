@@ -5065,7 +5065,7 @@ def draw_videos_screen():
 
                 # Pozycja ikony - na lewo od tekstu długości (odstęp 10px)
                 icon_x = duration_x - icon_width - 10
-                icon_y = header_y - 2  # Wyrównanie z tekstem
+                icon_y = header_y - 7  # Wyrównanie z tekstem
                 screen.blit(scaled_film_icon, (icon_x, icon_y))
 
             draw_text(duration_str, font_large, WHITE, duration_x, header_y)
