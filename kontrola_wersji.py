@@ -171,6 +171,7 @@ playback_icon = None  # Obrazek ikony playback
 steadyhand_icon = None  # Obrazek ikony steadyhand
 sd_icon = None  # Obrazek ikony karty SD
 brightness_icon = None  # Obrazek ikony brightness
+film_icon = None  # Obrazek ikony filmu
 
 # Menu System
 menu_tiles = []
@@ -4129,18 +4130,49 @@ def videos_navigate_down():
 
 
 def videos_navigate_left():
-    """Nawigacja w lewo - w układzie siatki"""
+    """Nawigacja w lewo - w układzie siatki z przechodzeniem między wierszami"""
     global selected_index
     if videos:
-        if selected_index % 3 != 0:  # Jeśli nie jest w pierwszej kolumnie
+        cols = 3
+        current_col = selected_index % cols
+
+        if current_col == 0:
+            # Jesteśmy w pierwszej kolumnie - przejdź do ostatniej kolumny poprzedniego wiersza
+            if selected_index > 0:
+                # Sprawdź ile kolumn ma poprzedni wiersz
+                prev_row_start = selected_index - cols
+                if prev_row_start >= 0:
+                    # Znajdź ostatni element poprzedniego wiersza
+                    prev_row_last = selected_index - 1
+                    selected_index = prev_row_last
+        else:
+            # Normalnie przesuń o 1 w lewo
             selected_index = max(0, selected_index - 1)
 
 
 def videos_navigate_right():
-    """Nawigacja w prawo - w układzie siatki"""
+    """Nawigacja w prawo - w układzie siatki z przechodzeniem między wierszami"""
     global selected_index
     if videos:
-        if selected_index % 3 != 2 and selected_index + 1 < len(videos):  # Jeśli nie jest w ostatniej kolumnie
+        cols = 3
+        current_col = selected_index % cols
+        current_row = selected_index // cols
+        total_rows = (len(videos) + cols - 1) // cols
+
+        # Sprawdź ile elementów ma aktualny wiersz
+        row_start = current_row * cols
+        row_end = min(row_start + cols, len(videos))
+        row_size = row_end - row_start
+
+        if current_col == row_size - 1:
+            # Jesteśmy w ostatniej kolumnie aktualnego wiersza - przejdź do pierwszej kolumny następnego wiersza
+            if current_row < total_rows - 1:
+                # Przejdź do pierwszego elementu następnego wiersza
+                next_row_start = (current_row + 1) * cols
+                if next_row_start < len(videos):
+                    selected_index = next_row_start
+        else:
+            # Normalnie przesuń o 1 w prawo
             selected_index = min(len(videos) - 1, selected_index + 1)
 
 
@@ -4208,7 +4240,7 @@ def pixelize_image(image, pixel_size=4):
 
 def load_images():
     """Załaduj obrazki interfejsu"""
-    global playback_icon, steadyhand_icon, sd_icon, brightness_icon
+    global playback_icon, steadyhand_icon, sd_icon, brightness_icon, film_icon
 
     try:
         # Załaduj ikonę playback
@@ -4246,6 +4278,15 @@ def load_images():
         else:
             print(f"[WARN] Nie znaleziono pliku: {brightness_path}")
             brightness_icon = None
+
+        # Załaduj ikonę filmu
+        film_path = Path(__file__).parent / "film.png"
+        if film_path.exists():
+            film_icon = pygame.image.load(str(film_path))
+            print("[OK] Ikona film załadowana")
+        else:
+            print(f"[WARN] Nie znaleziono pliku: {film_path}")
+            film_icon = None
     except Exception as e:
         print(f"[ERROR] Błąd wczytywania obrazków: {e}")
         playback_icon = None
@@ -4843,14 +4884,193 @@ def draw_videos_screen():
         color = (r, g, b)
         pygame.draw.line(screen, color, (0, y), (SCREEN_WIDTH, y))
 
-    header_height = 100
-    # Nagłówek - bez tła, gradient będzie widoczny
-    # pygame.draw.rect(screen, DARK_GRAY, (0, 0, SCREEN_WIDTH, header_height))
+    header_height = 95
 
-    # Nagłówek z wskaźnikiem trybu multi-select
-    if multi_select_mode:
-        draw_text("[VIDEOS] NAGRANE FILMY - TRYB ZAZNACZANIA", font_large, YELLOW, SCREEN_WIDTH // 2, 50, center=True)
+    # === GÓRNY NAGŁÓWEK - Data, godzina i długość zaznaczonego filmu ===
+    # Ramka nagłówka - tylko dolna krawędź
+    pygame.draw.line(screen, LIGHT_BLUE, (0, header_height), (SCREEN_WIDTH, header_height), 3)
+
+    # Pobierz informacje o zaznaczonym filmie
+    if videos and 0 <= selected_index < len(videos):
+        selected_video = videos[selected_index]
+
+        try:
+            # Parsuj nazwę pliku: video_YYYYMMDD_HHMMSS_XXfps.mp4
+            filename_parts = selected_video.stem.split('_')
+            if len(filename_parts) >= 3:
+                date_part = filename_parts[1]  # YYYYMMDD
+                time_part = filename_parts[2]  # HHMMSS
+
+                # Formatuj datę
+                year = date_part[0:4]
+                month = date_part[4:6]
+                day = date_part[6:8]
+                date_str = f"{day}/{month}/{year}"
+
+                # Formatuj godzinę
+                hour = time_part[0:2]
+                minute = time_part[2:4]
+                second = time_part[4:6]
+                time_str = f"{hour}:{minute}:{second}"
+            else:
+                # Fallback - użyj daty modyfikacji pliku
+                file_mtime = selected_video.stat().st_mtime
+                date_obj = datetime.fromtimestamp(file_mtime)
+                date_str = date_obj.strftime("%d/%m/%Y")
+                time_str = date_obj.strftime("%H:%M:%S")
+        except:
+            date_str = "??/??/????"
+            time_str = "??:??:??"
+
+        # Oblicz długość filmu
+        try:
+            cap = cv2.VideoCapture(str(selected_video))
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                duration = frame_count / fps if fps > 0 else 0
+                duration_hours = int(duration // 3600)
+                duration_minutes = int((duration % 3600) // 60)
+                duration_seconds = int(duration % 60)
+                duration_str = f"{duration_hours}:{duration_minutes:02d}:{duration_seconds:02d}"
+                cap.release()
+            else:
+                duration_str = "?:??:??"
+        except:
+            duration_str = "?:??:??"
+
+        # Rysuj informacje w nagłówku (tylko jeśli nie jesteśmy w trybie multi-select)
+        header_y = 45
+
+        if multi_select_mode:
+            # W trybie multi-select pokaż komunikat
+            draw_text("[VIDEOS] TRYB ZAZNACZANIA", font_large, YELLOW, SCREEN_WIDTH // 2, header_y, center=True)
+        else:
+            # Normalny tryb - pokaż datę, godzinę i długość z ikoną baterii
+            # Oblicz szerokość daty
+            date_text_surface = font_large.render(date_str, True, WHITE)
+            date_text_width = date_text_surface.get_width()
+
+            # Data i godzina obok siebie po lewej stronie
+            date_x = 40
+            draw_text(date_str, font_large, WHITE, date_x, header_y)
+
+            # Godzina zaraz obok daty (odstęp 20px) - NA BIAŁO
+            time_x = date_x + date_text_width + 20
+            draw_text(time_str, font_large, WHITE, time_x, header_y)
+
+            # Ikona baterii po prawej stronie
+            battery_width = 70
+            battery_height = 33
+            battery_right_margin = 40
+            battery_x = SCREEN_WIDTH - battery_right_margin - battery_width
+            battery_y = header_y - 5  # Wyrównanie z tekstem
+
+            # Rysuj ikonę baterii (uproszczona wersja)
+            battery_color = GREEN if battery_is_charging else WHITE
+
+            # Czarne tło pod baterią (outline)
+            outline_padding = 2
+            pygame.draw.rect(screen, BLACK,
+                           (battery_x - outline_padding, battery_y - outline_padding,
+                            battery_width + outline_padding * 2, battery_height + outline_padding * 2),
+                           border_radius=5)
+
+            # Główna ramka baterii
+            pygame.draw.rect(screen, battery_color,
+                           (battery_x, battery_y, battery_width, battery_height),
+                           3, border_radius=5)
+
+            # Końcówka baterii (PO LEWEJ)
+            tip_width = 8
+            tip_height = 16
+            tip_x = battery_x - tip_width
+            tip_y = battery_y + (battery_height - tip_height) // 2
+
+            # Czarne tło pod końcówką
+            pygame.draw.rect(screen, BLACK,
+                           (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
+
+            # Końcówka w kolorze baterii
+            pygame.draw.rect(screen, battery_color,
+                           (tip_x, tip_y, tip_width, tip_height))
+
+            # Segmenty baterii
+            segment_width = 14
+            segment_height = battery_height - 10
+            segment_spacing = 4
+            segments_start_x = battery_x + 8
+            segment_y = battery_y + 5
+
+            # Oblicz ile segmentów pokazać
+            battery_level = battery_max_displayed_level
+            if battery_level >= 75:
+                segments_to_draw = 4
+            elif battery_level >= 50:
+                segments_to_draw = 3
+            elif battery_level >= 25:
+                segments_to_draw = 2
+            else:
+                segments_to_draw = 1
+
+            # Ustaw clipping na wewnętrzną część baterii
+            clip_margin = 3
+            clip_rect = pygame.Rect(
+                battery_x + clip_margin,
+                battery_y + clip_margin,
+                battery_width - clip_margin * 2,
+                battery_height - clip_margin * 2
+            )
+            screen.set_clip(clip_rect)
+
+            # Rysuj segmenty
+            segment_color = GREEN if battery_is_charging else WHITE
+
+            for i in range(segments_to_draw):
+                segment_x = segments_start_x + i * (segment_width + segment_spacing)
+
+                # Czarne tło pod segmentem
+                outline_rect = pygame.Rect(
+                    segment_x - 1,
+                    segment_y - 1,
+                    segment_width + 2,
+                    segment_height + 2
+                )
+                pygame.draw.rect(screen, BLACK, outline_rect)
+
+                # Segment w odpowiednim kolorze
+                segment_rect = pygame.Rect(
+                    segment_x,
+                    segment_y,
+                    segment_width,
+                    segment_height
+                )
+                pygame.draw.rect(screen, segment_color, segment_rect)
+
+            # Wyłącz clipping
+            screen.set_clip(None)
+
+            # Długość filmu na lewo od ikony baterii (odstęp 30px)
+            duration_text_surface = font_large.render(duration_str, True, WHITE)
+            duration_text_width = duration_text_surface.get_width()
+            duration_x = battery_x - duration_text_width - 30
+
+            # Ikona filmu na lewo od tekstu długości
+            if film_icon:
+                # Przeskaluj ikonę do odpowiedniej wysokości (dostosuj do tekstu)
+                icon_height = 43
+                icon_aspect = film_icon.get_width() / film_icon.get_height()
+                icon_width = int(icon_height * icon_aspect)
+                scaled_film_icon = pygame.transform.scale(film_icon, (icon_width, icon_height))
+
+                # Pozycja ikony - na lewo od tekstu długości (odstęp 10px)
+                icon_x = duration_x - icon_width - 10
+                icon_y = header_y - 2  # Wyrównanie z tekstem
+                screen.blit(scaled_film_icon, (icon_x, icon_y))
+
+            draw_text(duration_str, font_large, WHITE, duration_x, header_y)
     else:
+        # Brak filmów - pokaż standardowy nagłówek
         draw_text("[VIDEOS] NAGRANE FILMY", font_large, WHITE, SCREEN_WIDTH // 2, 50, center=True)
 
     if not videos:
@@ -4948,12 +5168,10 @@ def draw_videos_screen():
             scrollbar_handle_y = start_y + int((scrollbar_area_height - scrollbar_handle_height) * videos_scroll_offset / max(1, total_rows - items_per_screen))
             pygame.draw.rect(screen, WHITE, (scrollbar_x, scrollbar_handle_y, scrollbar_width, scrollbar_handle_height), border_radius=5)
 
-        # Licznik filmów
+        # Licznik zaznaczonych filmów (tylko gdy są zaznaczone)
         if selected_videos:
-            counter_text = f"{selected_index + 1}/{len(videos)} | Zaznaczono: {len(selected_videos)}"
-        else:
-            counter_text = f"{selected_index + 1}/{len(videos)}"
-        draw_text(counter_text, font_small, WHITE, SCREEN_WIDTH // 2, header_height + 10, center=True, bg_color=BLUE, padding=10)
+            counter_text = f"Zaznaczono: {len(selected_videos)}"
+            draw_text(counter_text, font_small, WHITE, SCREEN_WIDTH // 2, header_height + 10, center=True, bg_color=BLUE, padding=10)
 
     # Panel dolny - styl jak w menu
     panel_height = 80
@@ -4991,24 +5209,40 @@ def draw_videos_screen():
         current_y += line_spacing
         line_index += 1
 
-    # Ramka panelu
-    pygame.draw.rect(screen, LIGHT_BLUE, (0, panel_y, SCREEN_WIDTH, panel_height), 3)
+    # Ramka panelu - tylko górna krawędź
+    pygame.draw.line(screen, LIGHT_BLUE, (0, panel_y), (SCREEN_WIDTH, panel_y), 3)
 
-    # Instrukcje zależne od trybu
+    # Dolne przyciski - styl jak w menu
+    button_y = panel_y + 15
+    exit_x = 40
+    exit_y = button_y
+
+    # Lewy dolny róg: WYJDŹ / VIDEOS
+    draw_text_with_outline("WYJDŹ", font_large, WHITE, BLACK, exit_x, exit_y)
+
+    videos_button_x = exit_x + 150
+    videos_button_width = 140
+    videos_button_height = 45
+    pygame.draw.rect(screen, WHITE, (videos_button_x + 10, exit_y - 5, videos_button_width, videos_button_height),
+                     border_radius=10)
+    draw_text("VIDEOS", font_large, BLACK, videos_button_x + 10 + videos_button_width // 2,
+              exit_y + videos_button_height // 2 - 5, center=True)
+
+    # Prawy dolny róg: ODTWÓRZ / OK (lub ZAZNACZ w trybie multi-select)
+    ok_button_width = 100
+    ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
+    ok_button_height = 45
+    pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
+                     border_radius=10)
+    draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
+              exit_y + ok_button_height // 2 - 5, center=True)
+
+    # Tekst przed przyciskiem OK zależy od trybu
+    action_x = ok_button_x - 200
     if multi_select_mode:
-        if selected_videos:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Delete: Usun zaznaczone | Videos: Wroc",
-                     font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 40, center=True)
-        else:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Zaznacz/Odznacz | Menu: Anuluj | Videos: Wroc",
-                     font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 40, center=True)
+        draw_text_with_outline("ZAZNACZ", font_large, YELLOW, BLACK, action_x, exit_y)
     else:
-        if selected_videos:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtworz | Menu: Opcje | Delete: Usun zaznaczone | Videos: Wroc",
-                     font_small, WHITE, SCREEN_WIDTH // 2, panel_y + 40, center=True)
-        else:
-            draw_text("Up/Down/Left/Right: Nawigacja | OK: Odtworz | Menu: Opcje | Delete: Usun | Videos: Wroc",
-                     font_small, WHITE, SCREEN_WIDTH // 2, panel_y + 40, center=True)
+        draw_text_with_outline("ODTWÓRZ", font_large, WHITE, BLACK, action_x, exit_y)
 
 
 def draw_video_context_menu():
@@ -5192,8 +5426,79 @@ def draw_playing_screen():
         except:
             pass
 
-    # Panel dolny - styl jak w menu
-    panel_height = 150
+    # === GÓRNY NAGŁÓWEK - Data, godzina i długość filmu ===
+    header_height = 95
+
+    # Gradient tła jak w menu
+    blue_gray_top = (70, 90, 110)
+    gradient_height = header_height
+    start_color = BLACK
+    end_color = blue_gray_top
+
+    for y in range(gradient_height):
+        ratio = y / gradient_height
+        r = int(start_color[0] * (1 - ratio) + end_color[0] * ratio)
+        g = int(start_color[1] * (1 - ratio) + end_color[1] * ratio)
+        b = int(start_color[2] * (1 - ratio) + end_color[2] * ratio)
+        color = (r, g, b)
+        pygame.draw.line(screen, color, (0, y), (SCREEN_WIDTH, y))
+
+    # Ramka nagłówka - tylko dolna krawędź
+    pygame.draw.line(screen, LIGHT_BLUE, (0, header_height), (SCREEN_WIDTH, header_height), 3)
+
+    # Pobierz informacje o pliku
+    if video_path_playing:
+        try:
+            # Parsuj nazwę pliku: video_YYYYMMDD_HHMMSS_XXfps.mp4
+            filename_parts = video_path_playing.stem.split('_')
+            if len(filename_parts) >= 3:
+                date_part = filename_parts[1]  # YYYYMMDD
+                time_part = filename_parts[2]  # HHMMSS
+
+                # Formatuj datę
+                year = date_part[0:4]
+                month = date_part[4:6]
+                day = date_part[6:8]
+                date_str = f"{day}/{month}/{year}"
+
+                # Formatuj godzinę
+                hour = time_part[0:2]
+                minute = time_part[2:4]
+                second = time_part[4:6]
+                time_str = f"{hour}:{minute}:{second}"
+            else:
+                # Fallback - użyj daty modyfikacji pliku
+                file_mtime = video_path_playing.stat().st_mtime
+                date_obj = datetime.fromtimestamp(file_mtime)
+                date_str = date_obj.strftime("%d/%m/%Y")
+                time_str = date_obj.strftime("%H:%M:%S")
+        except:
+            date_str = "??/??/????"
+            time_str = "??:??:??"
+
+        # Oblicz długość filmu
+        total_time_sec = video_total_frames / video_fps if video_fps > 0 else 0
+        duration_hours = int(total_time_sec // 3600)
+        duration_minutes = int((total_time_sec % 3600) // 60)
+        duration_seconds = int(total_time_sec % 60)
+        duration_str = f"{duration_hours}:{duration_minutes:02d}:{duration_seconds:02d}"
+
+        # Rysuj informacje w nagłówku
+        header_y = 45
+
+        # Data po lewej
+        draw_text(date_str, font_large, WHITE, 40, header_y)
+
+        # Godzina po środku
+        draw_text(time_str, font_large, YELLOW, SCREEN_WIDTH // 2, header_y, center=True)
+
+        # Długość po prawej
+        duration_text_surface = font_large.render(duration_str, True, WHITE)
+        duration_text_width = duration_text_surface.get_width()
+        draw_text(duration_str, font_large, WHITE, SCREEN_WIDTH - duration_text_width - 40, header_y)
+
+    # === PANEL DOLNY - Przyciski jak w menu ===
+    panel_height = 80
     panel_y = SCREEN_HEIGHT - panel_height
 
     # Ciemniejszy odcień niebiesko-szarego
@@ -5228,45 +5533,60 @@ def draw_playing_screen():
         current_y += line_spacing
         line_index += 1
 
-    # Ramka panelu
-    pygame.draw.rect(screen, LIGHT_BLUE, (0, panel_y, SCREEN_WIDTH, panel_height), 3)
-    
-    if video_path_playing:
-        name = video_path_playing.name
-        if len(name) > 50:
-            name = name[:47] + "..."
-        draw_text(name, font_small, YELLOW, SCREEN_WIDTH // 2, panel_y + 20, center=True)
-    
-    progress_y = panel_y + 60
-    progress_width = SCREEN_WIDTH - 100
-    progress_x = 50
+    # Ramka panelu - tylko górna krawędź
+    pygame.draw.line(screen, LIGHT_BLUE, (0, panel_y), (SCREEN_WIDTH, panel_y), 3)
+
+    # Dolne przyciski - styl jak w menu
+    button_y = panel_y + 15
+    exit_x = 40
+    exit_y = button_y
+
+    # Lewy dolny róg: WYJDŹ / VIDEOS
+    draw_text_with_outline("WYJDŹ", font_large, WHITE, BLACK, exit_x, exit_y)
+
+    videos_button_x = exit_x + 150
+    videos_button_width = 140
+    videos_button_height = 45
+    pygame.draw.rect(screen, WHITE, (videos_button_x + 10, exit_y - 5, videos_button_width, videos_button_height),
+                     border_radius=10)
+    draw_text("VIDEOS", font_large, BLACK, videos_button_x + 10 + videos_button_width // 2,
+              exit_y + videos_button_height // 2 - 5, center=True)
+
+    # Prawy dolny róg: PAUZA / OK
+    ok_button_width = 100
+    ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
+    ok_button_height = 45
+    pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
+                     border_radius=10)
+    draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
+              exit_y + ok_button_height // 2 - 5, center=True)
+
+    pause_x = ok_button_x - 150
+    draw_text_with_outline("PAUZA", font_large, WHITE, BLACK, pause_x, exit_y)
+
+    # === PROGRESS BAR - pomiędzy nagłówkiem a dolnym panelem ===
+    progress_margin = 50
+    progress_y = SCREEN_HEIGHT - panel_height - 80  # 80px nad dolnym panelem
+    progress_width = SCREEN_WIDTH - progress_margin * 2
+    progress_x = progress_margin
     progress_height = 15
-    
+
     pygame.draw.rect(screen, DARK_GRAY, (progress_x, progress_y, progress_width, progress_height), border_radius=8)
-    
+
     if video_total_frames > 0:
         progress_ratio = video_current_frame / video_total_frames
         filled_width = int(progress_width * progress_ratio)
         if filled_width > 0:
             pygame.draw.rect(screen, BLUE, (progress_x, progress_y, filled_width, progress_height), border_radius=8)
-    
+
     pygame.draw.rect(screen, WHITE, (progress_x, progress_y, progress_width, progress_height), 2, border_radius=8)
-    
+
+    # Czas aktualny / całkowity - poniżej progress bara
     current_time_sec = video_current_frame / video_fps if video_fps > 0 else 0
     total_time_sec = video_total_frames / video_fps if video_fps > 0 else 0
-    
+
     time_text = f"{format_time(current_time_sec)} / {format_time(total_time_sec)}"
-    draw_text(time_text, font_small, WHITE, SCREEN_WIDTH // 2, progress_y + 35, center=True)
-    
-    fps_text = f"[VIDEO] {video_fps} FPS"
-    draw_text(fps_text, font_tiny, GREEN, SCREEN_WIDTH - 150, panel_y + 20)
-    
-    status_text = "[PAUSE] PAUZA" if video_paused else "[PLAY] ODTWARZANIE"
-    status_color = ORANGE if video_paused else GREEN
-    draw_text(status_text, font_medium, status_color, SCREEN_WIDTH // 2, panel_y + 105, center=True)
-    
-    instructions = "OK: Pauza | Left/Right: Przewiń | Videos: Wyjdź"
-    draw_text(instructions, font_tiny, GRAY, SCREEN_WIDTH // 2, 30, center=True, bg_color=BLACK, padding=8)
+    draw_text(time_text, font_small, WHITE, SCREEN_WIDTH // 2, progress_y + 30, center=True)
 
 
 def draw_confirm_dialog():
