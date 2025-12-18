@@ -4947,12 +4947,20 @@ def draw_videos_screen():
             draw_text("[VIDEOS] TRYB ZAZNACZANIA", font_large, YELLOW, SCREEN_WIDTH // 2, header_y, center=True)
         else:
             # Normalny tryb - pokaż datę, godzinę i długość z ikoną baterii
+            # Napis "WYBRANY FILM:" na lewo od daty
+            label_x = 40
+            draw_text_with_outline("F.:", font_large, WHITE, BLACK, label_x, header_y)
+
+            # Oblicz szerokość napisu "WYBRANY FILM:"
+            label_text_surface = font_large.render("F.:", True, WHITE)
+            label_text_width = label_text_surface.get_width()
+
             # Oblicz szerokość daty
             date_text_surface = font_large.render(date_str, True, WHITE)
             date_text_width = date_text_surface.get_width()
 
-            # Data i godzina obok siebie po lewej stronie
-            date_x = 40
+            # Data po prawej od napisu (odstęp 20px)
+            date_x = label_x + label_text_width + 20
             draw_text(date_str, font_large, WHITE, date_x, header_y)
 
             # Godzina zaraz obok daty (odstęp 20px) - NA BIAŁO
@@ -5065,7 +5073,7 @@ def draw_videos_screen():
 
                 # Pozycja ikony - na lewo od tekstu długości (odstęp 10px)
                 icon_x = duration_x - icon_width - 10
-                icon_y = header_y - 7  # Wyrównanie z tekstem
+                icon_y = header_y - 8  # Wyrównanie z tekstem
                 screen.blit(scaled_film_icon, (icon_x, icon_y))
 
             draw_text(duration_str, font_large, WHITE, duration_x, header_y)
