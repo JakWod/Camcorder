@@ -4943,10 +4943,7 @@ def draw_videos_screen():
         # Rysuj informacje w nagłówku (tylko jeśli nie jesteśmy w trybie multi-select)
         header_y = 45
 
-        if multi_select_mode:
-            # W trybie multi-select pokaż komunikat
-            draw_text("[VIDEOS] TRYB ZAZNACZANIA", font_large, YELLOW, SCREEN_WIDTH // 2, header_y, center=True)
-        else:
+        if not multi_select_mode:
             # Normalny tryb - pokaż datę, godzinę i długość z ikoną baterii
             # Napis "WYBRANY FILM:" na lewo od daty
             label_x = 40
@@ -4968,101 +4965,15 @@ def draw_videos_screen():
             time_x = date_x + date_text_width + 20
             draw_text(time_str, font_large, WHITE, time_x, header_y)
 
-            # Ikona baterii po prawej stronie
-            battery_width = 70
-            battery_height = 33
-            battery_right_margin = 40
-            battery_x = SCREEN_WIDTH - battery_right_margin - battery_width
-            battery_y = header_y - 5  # Wyrównanie z tekstem
+            # Długość filmu na prawej stronie (bateria jest rysowana poniżej dla wszystkich trybów)
+            # Oblicz pozycję baterii (żeby użyć do pozycjonowania długości filmu)
+            battery_width_temp = 70
+            battery_right_margin_temp = 40
+            battery_x_temp = SCREEN_WIDTH - battery_right_margin_temp - battery_width_temp
 
-            # Rysuj ikonę baterii (uproszczona wersja)
-            battery_color = GREEN if battery_is_charging else WHITE
-
-            # Czarne tło pod baterią (outline)
-            outline_padding = 2
-            pygame.draw.rect(screen, BLACK,
-                           (battery_x - outline_padding, battery_y - outline_padding,
-                            battery_width + outline_padding * 2, battery_height + outline_padding * 2),
-                           border_radius=5)
-
-            # Główna ramka baterii
-            pygame.draw.rect(screen, battery_color,
-                           (battery_x, battery_y, battery_width, battery_height),
-                           3, border_radius=5)
-
-            # Końcówka baterii (PO LEWEJ)
-            tip_width = 8
-            tip_height = 16
-            tip_x = battery_x - tip_width
-            tip_y = battery_y + (battery_height - tip_height) // 2
-
-            # Czarne tło pod końcówką
-            pygame.draw.rect(screen, BLACK,
-                           (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
-
-            # Końcówka w kolorze baterii
-            pygame.draw.rect(screen, battery_color,
-                           (tip_x, tip_y, tip_width, tip_height))
-
-            # Segmenty baterii
-            segment_width = 14
-            segment_height = battery_height - 10
-            segment_spacing = 4
-            segments_start_x = battery_x + 8
-            segment_y = battery_y + 5
-
-            # Oblicz ile segmentów pokazać
-            battery_level = battery_max_displayed_level
-            if battery_level >= 75:
-                segments_to_draw = 4
-            elif battery_level >= 50:
-                segments_to_draw = 3
-            elif battery_level >= 25:
-                segments_to_draw = 2
-            else:
-                segments_to_draw = 1
-
-            # Ustaw clipping na wewnętrzną część baterii
-            clip_margin = 3
-            clip_rect = pygame.Rect(
-                battery_x + clip_margin,
-                battery_y + clip_margin,
-                battery_width - clip_margin * 2,
-                battery_height - clip_margin * 2
-            )
-            screen.set_clip(clip_rect)
-
-            # Rysuj segmenty
-            segment_color = GREEN if battery_is_charging else WHITE
-
-            for i in range(segments_to_draw):
-                segment_x = segments_start_x + i * (segment_width + segment_spacing)
-
-                # Czarne tło pod segmentem
-                outline_rect = pygame.Rect(
-                    segment_x - 1,
-                    segment_y - 1,
-                    segment_width + 2,
-                    segment_height + 2
-                )
-                pygame.draw.rect(screen, BLACK, outline_rect)
-
-                # Segment w odpowiednim kolorze
-                segment_rect = pygame.Rect(
-                    segment_x,
-                    segment_y,
-                    segment_width,
-                    segment_height
-                )
-                pygame.draw.rect(screen, segment_color, segment_rect)
-
-            # Wyłącz clipping
-            screen.set_clip(None)
-
-            # Długość filmu na lewo od ikony baterii (odstęp 30px)
             duration_text_surface = font_large.render(duration_str, True, WHITE)
             duration_text_width = duration_text_surface.get_width()
-            duration_x = battery_x - duration_text_width - 30
+            duration_x = battery_x_temp - duration_text_width - 30
 
             # Ikona filmu na lewo od tekstu długości
             if film_icon:
@@ -5078,9 +4989,117 @@ def draw_videos_screen():
                 screen.blit(scaled_film_icon, (icon_x, icon_y))
 
             draw_text(duration_str, font_large, WHITE, duration_x, header_y)
+        else:
+            # Tryb zaznaczania - pokaż napis "TRYB ZAZNACZANIA"
+            draw_text_with_outline("TRYB ZAZNACZANIA", font_large, YELLOW, BLACK, SCREEN_WIDTH // 2, header_y, center=True)
     else:
         # Brak filmów - pokaż standardowy nagłówek
         draw_text("[VIDEOS] NAGRANE FILMY", font_large, WHITE, SCREEN_WIDTH // 2, 50, center=True)
+
+    # Bateria w prawym górnym rogu (zawsze pokazywana)
+    battery_width = 70
+    battery_height = 33
+    battery_right_margin = 40
+    battery_x = SCREEN_WIDTH - battery_right_margin - battery_width
+    battery_y = 30  # Stała pozycja w górnej części ekranu
+
+    # Rysuj ikonę baterii
+    battery_color = GREEN if battery_is_charging else WHITE
+
+    # Czarne tło pod baterią (outline)
+    outline_padding = 2
+    pygame.draw.rect(screen, BLACK,
+                   (battery_x - outline_padding, battery_y - outline_padding,
+                    battery_width + outline_padding * 2, battery_height + outline_padding * 2),
+                   border_radius=5)
+
+    # Główna ramka baterii
+    pygame.draw.rect(screen, battery_color,
+                   (battery_x, battery_y, battery_width, battery_height),
+                   3, border_radius=5)
+
+    # Końcówka baterii (PO LEWEJ)
+    tip_width = 8
+    tip_height = 16
+    tip_x = battery_x - tip_width
+    tip_y = battery_y + (battery_height - tip_height) // 2
+
+    # Czarne tło pod końcówką
+    pygame.draw.rect(screen, BLACK,
+                   (tip_x - 1, tip_y - 1, tip_width + 2, tip_height + 2))
+
+    # Końcówka w kolorze baterii
+    pygame.draw.rect(screen, battery_color,
+                   (tip_x, tip_y, tip_width, tip_height))
+
+    # Segmenty baterii
+    segment_width = 14
+    segment_height = battery_height - 10
+    segment_spacing = 4
+    segments_start_x = battery_x + 8
+    segment_y = battery_y + 5
+
+    # Oblicz ile segmentów pokazać
+    battery_level = battery_max_displayed_level
+    if battery_level >= 75:
+        segments_to_draw = 4
+    elif battery_level >= 50:
+        segments_to_draw = 3
+    elif battery_level >= 25:
+        segments_to_draw = 2
+    else:
+        segments_to_draw = 1
+
+    # Ustaw clipping na wewnętrzną część baterii
+    clip_margin = 3
+    clip_rect = pygame.Rect(
+        battery_x + clip_margin,
+        battery_y + clip_margin,
+        battery_width - clip_margin * 2,
+        battery_height - clip_margin * 2
+    )
+    screen.set_clip(clip_rect)
+
+    # Rysuj segmenty
+    segment_color = GREEN if battery_is_charging else WHITE
+
+    for i in range(segments_to_draw):
+        segment_x = segments_start_x + i * (segment_width + segment_spacing)
+
+        # Czarne tło pod segmentem
+        outline_rect = pygame.Rect(
+            segment_x - 1,
+            segment_y - 1,
+            segment_width + 2,
+            segment_height + 2
+        )
+        pygame.draw.rect(screen, BLACK, outline_rect)
+
+        # Segment w odpowiednim kolorze
+        segment_rect = pygame.Rect(
+            segment_x,
+            segment_y,
+            segment_width,
+            segment_height
+        )
+        pygame.draw.rect(screen, segment_color, segment_rect)
+
+    # Wyłącz clipping
+    screen.set_clip(None)
+
+    # Rysuj piorunek gdy bateria się ładuje
+    if battery_is_charging:
+        lightning_center_x = battery_x + battery_width // 2
+        lightning_center_y = battery_y + battery_height // 2
+        lightning_points = [
+            (lightning_center_x - 4, lightning_center_y - 8),
+            (lightning_center_x + 2, lightning_center_y),
+            (lightning_center_x - 2, lightning_center_y),
+            (lightning_center_x + 4, lightning_center_y + 8),
+            (lightning_center_x, lightning_center_y + 2),
+            (lightning_center_x + 1, lightning_center_y - 2)
+        ]
+        pygame.draw.polygon(screen, YELLOW, lightning_points)
 
     if not videos:
         draw_text("[EMPTY] Brak filmow", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
@@ -5154,18 +5173,17 @@ def draw_videos_screen():
                 pygame.draw.rect(screen, GRAY, (x, y, thumb_width, thumb_height), border_radius=5)
                 draw_text("[VIDEO]", font_large, WHITE, x + thumb_width // 2, y + thumb_height // 2, center=True)
 
-            # Ramka
-            border_color = YELLOW if i == selected_index else WHITE
-            border_width = 4 if i == selected_index else 2
-            pygame.draw.rect(screen, border_color, (x, y, thumb_width, thumb_height), border_width, border_radius=5)
-
-            # Checkbox dla zaznaczonych filmów
+            # Ramka - pomarańczowa dla zaznaczonych filmów, żółta dla aktualnie wybranego, biała dla reszty
             if i in selected_videos:
-                checkbox_size = 40
-                checkbox_x = x + thumb_width - checkbox_size - 10
-                checkbox_y = y + 10
-                pygame.draw.circle(screen, GREEN, (checkbox_x + checkbox_size // 2, checkbox_y + checkbox_size // 2), checkbox_size // 2)
-                draw_text("[YES]", font_medium, WHITE, checkbox_x + checkbox_size // 2, checkbox_y + checkbox_size // 2, center=True)
+                border_color = ORANGE
+                border_width = 4
+            elif i == selected_index:
+                border_color = YELLOW
+                border_width = 4
+            else:
+                border_color = WHITE
+                border_width = 2
+            pygame.draw.rect(screen, border_color, (x, y, thumb_width, thumb_height), border_width, border_radius=5)
 
         # Rysuj scrollbar
         if total_rows > items_per_screen:
@@ -5177,10 +5195,10 @@ def draw_videos_screen():
             scrollbar_handle_y = start_y + int((scrollbar_area_height - scrollbar_handle_height) * videos_scroll_offset / max(1, total_rows - items_per_screen))
             pygame.draw.rect(screen, WHITE, (scrollbar_x, scrollbar_handle_y, scrollbar_width, scrollbar_handle_height), border_radius=5)
 
-        # Licznik zaznaczonych filmów (tylko gdy są zaznaczone)
+        # Licznik zaznaczonych filmów w lewym górnym rogu (tylko gdy są zaznaczone)
         if selected_videos:
-            counter_text = f"Zaznaczono: {len(selected_videos)}"
-            draw_text(counter_text, font_small, WHITE, SCREEN_WIDTH // 2, header_height + 10, center=True, bg_color=BLUE, padding=10)
+            counter_text = f"{len(selected_videos)}/{len(videos)}"
+            draw_text_with_outline(counter_text, font_large, WHITE, BLACK, 40, 45)
 
     # Panel dolny - styl jak w menu
     panel_height = 80
@@ -5260,8 +5278,11 @@ def draw_videos_screen():
     menu_button_x = action_x - menu_button_width - 40  # 40px odstępu od "ODTWÓRZ"
     menu_button_y = exit_y - 5
 
-    # Tekst "OPCJE" na lewo od przycisku MENU
-    draw_text_with_outline("OPCJE", font_large, WHITE, BLACK, menu_button_x - 140, exit_y)
+    # Tekst przed przyciskiem MENU zależy od trybu
+    if multi_select_mode:
+        draw_text_with_outline("OPUŚĆ TRYB", font_large, YELLOW, BLACK, menu_button_x - 290, exit_y)
+    else:
+        draw_text_with_outline("OPCJE", font_large, WHITE, BLACK, menu_button_x - 140, exit_y)
 
     pygame.draw.rect(screen, WHITE, (menu_button_x, menu_button_y, menu_button_width, menu_button_height),
                      border_radius=10)
@@ -5499,24 +5520,38 @@ def draw_video_info_dialog():
     except Exception:
         draw_text_with_outline("Blad odczytu informacji", font_large, RED, BLACK, info_x, info_y + info_spacing * 3)
 
-    # Podpowiedzi na dole w formie guzików - styl jak przyciski WYJDŹ/OPCJE
-    button_bar_y = popup_y + popup_height - 70
+    # Dolny header w innym kolorze (ciemniejszy niebieski)
+    footer_height = 80
+    footer_y = popup_y + popup_height - footer_height
+    footer_color = (30, 40, 50)  # Ciemniejszy odcień niż główne tło
+    pygame.draw.rect(screen, footer_color, (popup_x, footer_y, popup_width, footer_height))
 
-    # Lewo: tekst "ZAMKNIJ" z outline
-    draw_text_with_outline("ZAMKNIJ", font_large, WHITE, BLACK, popup_x + 600, button_bar_y)
+    # Białe obramowanie footera (wszystkie krawędzie)
+    pygame.draw.line(screen, WHITE, (popup_x, footer_y), (popup_x + popup_width, footer_y), 2)  # Góra
+    pygame.draw.line(screen, WHITE, (popup_x, footer_y), (popup_x, popup_y + popup_height), 3)  # Lewo
+    pygame.draw.line(screen, WHITE, (popup_x + popup_width, footer_y), (popup_x + popup_width, popup_y + popup_height), 3)  # Prawo
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y + popup_height), (popup_x + popup_width, popup_y + popup_height), 3)  # Dół
 
-    # Prawo: biała ramka z tekstem "OK / MENU" - styl jak przycisk MENU/VIDEOS
+    # Podpowiedzi na dole w dolnym headerze
+    button_bar_y = footer_y + footer_height // 2
+
+    # Prawo: biała ramka z tekstem "OK/MENU" - styl jak przycisk MENU/VIDEOS
     button_width = 250
     button_height = 55
     button_x = popup_x + popup_width - button_width - 40
-    button_y = button_bar_y - 10
+    button_y = button_bar_y - button_height // 2
 
     # Biała wypełniona ramka
     pygame.draw.rect(screen, WHITE, (button_x, button_y, button_width, button_height), border_radius=10)
 
     # Czarny tekst wewnątrz ramki - wyrównany do lewej
     text_x = button_x + 20  # Margines od lewej krawędzi ramki
-    draw_text("OK/MENU", font_large, BLACK, text_x, (button_y + button_height // 2 - 5) - 10)
+    draw_text("OK/MENU", font_large, BLACK, text_x, button_y + button_height // 2 - 15)
+
+    # Tekst "ZAMKNIJ" tuż przy przycisku OK/MENU (na lewo)
+    zamknij_text_width = font_large.size("ZAMKNIJ")[0]
+    zamknij_x = button_x - zamknij_text_width - 30  # 30px odstępu od przycisku
+    draw_text_with_outline("ZAMKNIJ", font_large, WHITE, BLACK, zamknij_x, button_bar_y - 15)
 
 
 def draw_playing_screen():
