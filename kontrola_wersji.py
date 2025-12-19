@@ -2,6 +2,7 @@
 import pygame
 import sys
 import os
+os.environ['GPIOZERO_PIN_FACTORY'] = 'lgpio'
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -5252,100 +5253,230 @@ def draw_videos_screen():
     else:
         draw_text_with_outline("ODTWÓRZ", font_large, WHITE, BLACK, action_x, exit_y)
 
+    # Przycisk MENU wyrównany do prawej (na lewo od ODTWÓRZ/OK)
+    menu_button_width = 120
+    menu_button_height = 45
+    # Pozycja: na lewo od "ODTWÓRZ"
+    menu_button_x = action_x - menu_button_width - 40  # 40px odstępu od "ODTWÓRZ"
+    menu_button_y = exit_y - 5
+
+    # Tekst "OPCJE" na lewo od przycisku MENU
+    draw_text_with_outline("OPCJE", font_large, WHITE, BLACK, menu_button_x - 140, exit_y)
+
+    pygame.draw.rect(screen, WHITE, (menu_button_x, menu_button_y, menu_button_width, menu_button_height),
+                     border_radius=10)
+    draw_text("MENU", font_large, BLACK, menu_button_x + menu_button_width // 2,
+              menu_button_y + menu_button_height // 2, center=True)
+
 
 def draw_video_context_menu():
-    """Menu kontekstowe dla filmów"""
-    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-    overlay.set_alpha(200)
-    overlay.fill(BLACK)
+    """Menu kontekstowe dla filmów - styl jak popup wyboru opcji"""
+    # Przyciemnienie tła
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 200))
     screen.blit(overlay, (0, 0))
 
-    menu_width = 700
-    menu_height = 400
-    menu_x = (SCREEN_WIDTH - menu_width) // 2
-    menu_y = (SCREEN_HEIGHT - menu_height) // 2
-
-    pygame.draw.rect(screen, DARK_GRAY, (menu_x, menu_y, menu_width, menu_height), border_radius=20)
-    pygame.draw.rect(screen, BLUE, (menu_x, menu_y, menu_width, menu_height), 5, border_radius=20)
-
-    draw_text("[MENU] OPCJE", font_large, WHITE, SCREEN_WIDTH // 2, menu_y + 60, center=True)
+    # Wymiary popup
+    popup_width = 700
+    item_height = 80
+    header_height = 80
 
     # Opcje menu
     menu_options = [
-        {"label": "Zaznacz wiele filmow", "icon": "[SELECT]"},
-        {"label": "Pokaż informacje", "icon": "[INFO]"},
+        {"label": "Zaznacz wiele filmow"},
+        {"label": "Pokaż informacje"},
     ]
 
-    option_height = 80
-    start_y = menu_y + 140
+    total_items = len(menu_options)
+    popup_height = total_items * item_height + 40 + header_height + 70
+
+    # Pozycja po prawej stronie ekranu
+    popup_margin = 30
+    popup_x = SCREEN_WIDTH - popup_width - popup_margin
+    popup_y = (SCREEN_HEIGHT - popup_height) // 2 - 35
+
+    # Tło popup - taki sam kolor jak główny kwadrat
+    dark_blue_gray = (40, 50, 60)
+    pygame.draw.rect(screen, dark_blue_gray, (popup_x, popup_y, popup_width, popup_height))
+
+    # Dodaj liniowy gradient - algorytm jak w głównym kwadracie
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1
+
+    current_y = popup_y + line_spacing
+    line_index = 0
+
+    while current_y < popup_y + popup_height:
+        cyclic_index = line_index % cycle_length
+        brightness_boost = cyclic_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+        line_thickness = initial_line_thickness - cyclic_index
+
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (popup_x + 10, current_y + i),
+                               (popup_x + popup_width - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
+    # Białe obramowanie wokół całego okna
+    pygame.draw.rect(screen, LIGHT_BLUE, (popup_x, popup_y, popup_width, popup_height), 3)
+
+    # Nagłówek na czarnym tle
+    pygame.draw.rect(screen, BLACK, (popup_x, popup_y, popup_width, header_height))
+
+    header_text = "OPCJE"
+    draw_text(header_text, menu_font, WHITE, popup_x + popup_width // 2, (popup_y + header_height // 2) + 10, center=True)
+
+    # Białe obramowanie nagłówka (tylko góra, lewo, prawo - bez dołu)
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x + popup_width, popup_y), 3)  # Góra
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
+    pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
+
+    # Lista opcji
+    vertical_padding = 20
+    list_start_y = popup_y + header_height + vertical_padding
 
     for i, option in enumerate(menu_options):
-        option_y = start_y + i * (option_height + 20)
+        is_selected = (i == video_context_menu_selection)
+        item_y = list_start_y + i * item_height
 
-        if i == video_context_menu_selection:
-            pygame.draw.rect(screen, BLUE, (menu_x + 40, option_y, menu_width - 80, option_height), border_radius=15)
-            pygame.draw.rect(screen, YELLOW, (menu_x + 40, option_y, menu_width - 80, option_height), 6, border_radius=15)
+        # Tło zaznaczonego elementu - taki sam gradient jak w głównym menu
+        if is_selected:
+            rect_x = popup_x + 20
+            rect_y = item_y - 5
+            rect_w = popup_width - 40
+            rect_h = item_height - 10
+
+            # Kolory gradientu jak w głównym menu
+            dark_navy = (15, 30, 60)
+            light_blue = (100, 150, 255)
+
+            # Rysuj gradient - górna 1/3 z przejściem
+            gradient_height_grad = rect_h // 3
+            for y_offset in range(rect_h):
+                if y_offset < gradient_height_grad:
+                    # Gradient od jasnego do ciemnego
+                    ratio = y_offset / gradient_height_grad
+                    r = int(light_blue[0] * (1 - ratio) + dark_navy[0] * ratio)
+                    g = int(light_blue[1] * (1 - ratio) + dark_navy[1] * ratio)
+                    b = int(light_blue[2] * (1 - ratio) + dark_navy[2] * ratio)
+                    color = (r, g, b)
+                else:
+                    # Ciemno granatowy dla reszty
+                    color = dark_navy
+
+                pygame.draw.line(screen, color,
+                               (rect_x, rect_y + y_offset),
+                               (rect_x + rect_w, rect_y + y_offset))
+
+            # Białe obramowanie 5px
+            pygame.draw.rect(screen, WHITE, (rect_x, rect_y, rect_w, rect_h), 5)
             text_color = YELLOW
         else:
-            pygame.draw.rect(screen, GRAY, (menu_x + 40, option_y, menu_width - 80, option_height), border_radius=15)
             text_color = WHITE
 
-        draw_text(f"{option['icon']} {option['label']}", font_medium, text_color,
-                 SCREEN_WIDTH // 2, option_y + option_height // 2, center=True)
-
-    draw_text("Up/Down: Wybierz | OK: Zatwierdz | Menu: Wroc", font_small, GRAY,
-             SCREEN_WIDTH // 2, menu_y + menu_height - 40, center=True)
+        # Tekst opcji - używamy menu_font
+        display_text = option['label'].upper()
+        draw_text(display_text, menu_font, text_color, popup_x + popup_width // 2, item_y + item_height // 2 - 10, center=True)
 
 
 def draw_video_info_dialog():
-    """Dialog z informacjami o filmie"""
+    """Dialog z informacjami o filmie - styl jak popup menu"""
     if not videos or video_info_index < 0 or video_info_index >= len(videos):
         return
 
     video = videos[video_info_index]
 
-    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-    overlay.set_alpha(200)
-    overlay.fill(BLACK)
+    # Przyciemnienie tła
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 200))
     screen.blit(overlay, (0, 0))
 
-    dialog_width = 900
-    dialog_height = 700
-    dialog_x = (SCREEN_WIDTH - dialog_width) // 2
-    dialog_y = (SCREEN_HEIGHT - dialog_height) // 2
+    # Wymiary popup - szersze okno
+    popup_width = 1100
+    header_height = 80
 
-    pygame.draw.rect(screen, DARK_GRAY, (dialog_x, dialog_y, dialog_width, dialog_height), border_radius=20)
-    pygame.draw.rect(screen, BLUE, (dialog_x, dialog_y, dialog_width, dialog_height), 5, border_radius=20)
+    # Oblicz wysokość na podstawie zawartości
+    content_height = 450  # Informacje bez miniaturki - więcej miejsca
+    popup_height = header_height + content_height + 100
 
-    draw_text("[INFO] INFORMACJE O FILMIE", font_large, WHITE, SCREEN_WIDTH // 2, dialog_y + 60, center=True)
+    # Pozycja po prawej stronie ekranu
+    popup_margin = 30
+    popup_x = SCREEN_WIDTH - popup_width - popup_margin
+    popup_y = (SCREEN_HEIGHT - popup_height) // 2 - 35
 
-    # Miniaturka
-    thumb_y = dialog_y + 120
-    if video.stem in thumbnails:
-        try:
-            thumb_x = (SCREEN_WIDTH - 320) // 2
-            screen.blit(thumbnails[video.stem], (thumb_x, thumb_y))
-            pygame.draw.rect(screen, WHITE, (thumb_x, thumb_y, 320, 180), 3, border_radius=5)
-        except:
-            pass
+    # Tło popup - taki sam kolor jak główny kwadrat
+    dark_blue_gray = (40, 50, 60)
+    pygame.draw.rect(screen, dark_blue_gray, (popup_x, popup_y, popup_width, popup_height))
 
-    # Informacje
-    info_y = thumb_y + 200
-    info_spacing = 50
+    # Dodaj liniowy gradient - algorytm jak w głównym kwadracie
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1
+
+    current_y = popup_y + line_spacing
+    line_index = 0
+
+    while current_y < popup_y + popup_height:
+        cyclic_index = line_index % cycle_length
+        brightness_boost = cyclic_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+        line_thickness = initial_line_thickness - cyclic_index
+
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (popup_x + 10, current_y + i),
+                               (popup_x + popup_width - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
+    # Białe obramowanie wokół całego okna
+    pygame.draw.rect(screen, LIGHT_BLUE, (popup_x, popup_y, popup_width, popup_height), 3)
+
+    # Nagłówek na czarnym tle
+    pygame.draw.rect(screen, BLACK, (popup_x, popup_y, popup_width, header_height))
+    header_text = "INFORMACJE O FILMIE"
+    draw_text(header_text, menu_font, WHITE, popup_x + popup_width // 2, (popup_y + header_height // 2) + 10, center=True)
+
+    # Białe obramowanie nagłówka (tylko góra, lewo, prawo - bez dołu)
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x + popup_width, popup_y), 3)  # Góra
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
+    pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
+
+    # Informacje (bez miniaturki) - wyrównane do lewej
+    info_y = popup_y + header_height + 50
+    info_spacing = 60
+    info_x = popup_x + 40  # Margines od lewej
 
     # Nazwa pliku
     display_name = video.name
     if len(display_name) > 50:
         display_name = display_name[:47] + "..."
-    draw_text(f"[FILE] Nazwa: {display_name}", font_small, WHITE, SCREEN_WIDTH // 2, info_y, center=True)
+    draw_text_with_outline(f"NAZWA: {display_name}", font_large, WHITE, BLACK, info_x, info_y)
 
     # Rozmiar pliku
     size_mb = video.stat().st_size / (1024 * 1024)
-    draw_text(f"[SIZE] Rozmiar: {size_mb:.2f} MB", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing, center=True)
+    draw_text_with_outline(f"ROZMIAR: {size_mb:.2f} MB", font_large, WHITE, BLACK, info_x, info_y + info_spacing)
 
     # Data i godzina nagrania
     date_str = datetime.fromtimestamp(video.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-    draw_text(f"[DATE] Data nagrania: {date_str}", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 2, center=True)
+    draw_text_with_outline(f"DATA NAGRANIA: {date_str}", font_large, WHITE, BLACK, info_x, info_y + info_spacing * 2)
 
     # Dlugosc filmu (jesli mozliwe)
     try:
@@ -5356,19 +5487,36 @@ def draw_video_info_dialog():
             duration = frame_count / fps if fps > 0 else 0
             minutes = int(duration // 60)
             seconds = int(duration % 60)
-            draw_text(f"[TIME] Dlugosc: {minutes}:{seconds:02d}", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+            draw_text_with_outline(f"DŁUGOŚĆ: {minutes}:{seconds:02d}", font_large, WHITE, BLACK, info_x, info_y + info_spacing * 3)
 
             # Format i FPS
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            draw_text(f"[VIDEO] Format: {width}x{height} @ {int(fps)} FPS", font_small, WHITE, SCREEN_WIDTH // 2, info_y + info_spacing * 4, center=True)
+            draw_text_with_outline(f"FORMAT: {width}x{height} @ {int(fps)} FPS", font_large, WHITE, BLACK, info_x, info_y + info_spacing * 4)
             cap.release()
         else:
-            draw_text("[WARN] Nie mozna odczytac dlugosci", font_small, GRAY, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
-    except Exception as e:
-        draw_text(f"[ERROR] Blad: {str(e)}", font_small, RED, SCREEN_WIDTH // 2, info_y + info_spacing * 3, center=True)
+            draw_text_with_outline("Nie mozna odczytac dlugosci", font_large, GRAY, BLACK, info_x, info_y + info_spacing * 3)
+    except Exception:
+        draw_text_with_outline("Blad odczytu informacji", font_large, RED, BLACK, info_x, info_y + info_spacing * 3)
 
-    draw_text("OK lub Menu: Zamknij", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
+    # Podpowiedzi na dole w formie guzików - styl jak przyciski WYJDŹ/OPCJE
+    button_bar_y = popup_y + popup_height - 70
+
+    # Lewo: tekst "ZAMKNIJ" z outline
+    draw_text_with_outline("ZAMKNIJ", font_large, WHITE, BLACK, popup_x + 600, button_bar_y)
+
+    # Prawo: biała ramka z tekstem "OK / MENU" - styl jak przycisk MENU/VIDEOS
+    button_width = 250
+    button_height = 55
+    button_x = popup_x + popup_width - button_width - 40
+    button_y = button_bar_y - 10
+
+    # Biała wypełniona ramka
+    pygame.draw.rect(screen, WHITE, (button_x, button_y, button_width, button_height), border_radius=10)
+
+    # Czarny tekst wewnątrz ramki - wyrównany do lewej
+    text_x = button_x + 20  # Margines od lewej krawędzi ramki
+    draw_text("OK/MENU", font_large, BLACK, text_x, (button_y + button_height // 2 - 5) - 10)
 
 
 def draw_playing_screen():
