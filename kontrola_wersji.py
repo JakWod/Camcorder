@@ -4867,8 +4867,12 @@ def draw_main_screen(frame):
     draw_recording_time_remaining()
 
 
-def draw_videos_screen():
-    """Ekran listy filmów - układ siatki z miniaturkami"""
+def draw_videos_screen(hide_buttons=False):
+    """Ekran listy filmów - układ siatki z miniaturkami
+
+    Args:
+        hide_buttons: Jeśli True, nie rysuj przycisków w dolnym panelu (ale panel zostaje)
+    """
     global videos_scroll_offset
 
     # Gradient tła jak w menu
@@ -5102,7 +5106,7 @@ def draw_videos_screen():
         pygame.draw.polygon(screen, YELLOW, lightning_points)
 
     if not videos:
-        draw_text("[EMPTY] Brak filmow", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
+        draw_text("[EMPTY] Brak filmów", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
         draw_text("Zamknij i nacisnij Record", font_small, DARK_GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
     else:
         # Ustawienia siatki
@@ -5200,7 +5204,7 @@ def draw_videos_screen():
             counter_text = f"{len(selected_videos)}/{len(videos)}"
             draw_text_with_outline(counter_text, font_large, WHITE, BLACK, 40, 45)
 
-    # Panel dolny - styl jak w menu
+    # Panel dolny - styl jak w menu (zawsze rysowany)
     panel_height = 80
     panel_y = SCREEN_HEIGHT - panel_height
 
@@ -5238,6 +5242,10 @@ def draw_videos_screen():
 
     # Ramka panelu - tylko górna krawędź
     pygame.draw.line(screen, LIGHT_BLUE, (0, panel_y), (SCREEN_WIDTH, panel_y), 3)
+
+    # Jeśli hide_buttons=True, nie rysuj przycisków (używane gdy popup jest wyświetlony)
+    if hide_buttons:
+        return
 
     # Dolne przyciski - styl jak w menu
     button_y = panel_y + 15
@@ -5304,7 +5312,7 @@ def draw_video_context_menu():
 
     # Opcje menu
     menu_options = [
-        {"label": "Zaznacz wiele filmow"},
+        {"label": "Zaznacz wiele filmów"},
         {"label": "Pokaż informacje"},
     ]
 
@@ -5363,7 +5371,7 @@ def draw_video_context_menu():
     pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
 
     # Lista opcji
-    vertical_padding = 20
+    vertical_padding = 60  # Zwiększone z 20 na 60 - przyciski niżej
     list_start_y = popup_y + header_height + vertical_padding
 
     for i, option in enumerate(menu_options):
@@ -5408,6 +5416,33 @@ def draw_video_context_menu():
         # Tekst opcji - używamy menu_font
         display_text = option['label'].upper()
         draw_text(display_text, menu_font, text_color, popup_x + popup_width // 2, item_y + item_height // 2 - 10, center=True)
+
+    # Dolne przyciski - styl jak w menu
+    exit_x = 40
+    exit_y = SCREEN_HEIGHT - 60
+
+    # Lewy dolny róg: COFNIJ / MENU
+    draw_text_with_outline("COFNIJ", font_large, WHITE, BLACK, exit_x, exit_y)
+
+    menu_button_x = exit_x + 150
+    menu_button_width = 140
+    menu_button_height = 45
+    pygame.draw.rect(screen, WHITE, (menu_button_x + 10, exit_y - 5, menu_button_width, menu_button_height),
+                     border_radius=10)
+    draw_text("MENU", font_large, BLACK, menu_button_x + 10 + menu_button_width // 2,
+              exit_y + menu_button_height // 2 - 5, center=True)
+
+    # Prawy dolny róg: WYBIERZ / OK
+    ok_button_width = 100
+    ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
+    ok_button_height = 45
+    pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
+                     border_radius=10)
+    draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
+              exit_y + ok_button_height // 2 - 5, center=True)
+
+    wybierz_x = ok_button_x - 160
+    draw_text_with_outline("WYBIERZ", font_large, WHITE, BLACK, wybierz_x, exit_y)
 
 
 def draw_video_info_dialog():
@@ -5781,61 +5816,145 @@ def draw_playing_screen():
 
 
 def draw_confirm_dialog():
-    """Dialog potwierdzenia"""
-    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-    overlay.set_alpha(220)
-    overlay.fill(BLACK)
+    """Dialog potwierdzenia - styl jak popup menu"""
+    # Przyciemnienie tła
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 200))
     screen.blit(overlay, (0, 0))
 
-    dialog_width = 900
-    dialog_height = 400
-    dialog_x = (SCREEN_WIDTH - dialog_width) // 2
-    dialog_y = (SCREEN_HEIGHT - dialog_height) // 2
+    # Wymiary popup
+    popup_width = 1000
+    header_height = 80
+    content_height = 300
+    popup_height = header_height + content_height
 
-    pygame.draw.rect(screen, DARK_GRAY, (dialog_x, dialog_y, dialog_width, dialog_height), border_radius=20)
-    pygame.draw.rect(screen, RED, (dialog_x, dialog_y, dialog_width, dialog_height), 5, border_radius=20)
+    # Pozycja po prawej stronie ekranu
+    popup_margin = 30
+    popup_x = SCREEN_WIDTH - popup_width - popup_margin
+    popup_y = (SCREEN_HEIGHT - popup_height) // 2 - 35
 
-    draw_text("[WARN] POTWIERDZENIE", font_large, RED, SCREEN_WIDTH // 2, dialog_y + 60, center=True)
+    # Tło popup - taki sam kolor jak główny kwadrat
+    dark_blue_gray = (40, 50, 60)
+    pygame.draw.rect(screen, dark_blue_gray, (popup_x, popup_y, popup_width, popup_height))
+
+    # Dodaj liniowy gradient - algorytm jak w głównym kwadracie
+    line_spacing = 15
+    brightness_increment = 2
+    initial_line_thickness = 10
+    cycle_length = initial_line_thickness + 1
+
+    current_y = popup_y + line_spacing
+    line_index = 0
+
+    while current_y < popup_y + popup_height:
+        cyclic_index = line_index % cycle_length
+        brightness_boost = cyclic_index * brightness_increment
+        line_color = (
+            min(255, dark_blue_gray[0] + brightness_boost),
+            min(255, dark_blue_gray[1] + brightness_boost),
+            min(255, dark_blue_gray[2] + brightness_boost)
+        )
+        line_thickness = initial_line_thickness - cyclic_index
+
+        if line_thickness > 0:
+            for i in range(line_thickness):
+                pygame.draw.line(screen, line_color,
+                               (popup_x + 10, current_y + i),
+                               (popup_x + popup_width - 10, current_y + i))
+
+        current_y += line_spacing
+        line_index += 1
+
+    # Białe obramowanie wokół całego okna
+    pygame.draw.rect(screen, LIGHT_BLUE, (popup_x, popup_y, popup_width, popup_height), 3)
+
+    # Nagłówek na czarnym tle
+    pygame.draw.rect(screen, BLACK, (popup_x, popup_y, popup_width, header_height))
+    header_text = "POTWIERDZENIE USUNIĘCIA"
+    draw_text(header_text, menu_font, RED, popup_x + popup_width // 2, (popup_y + header_height // 2) + 10, center=True)
+
+    # Białe obramowanie nagłówka (tylko góra, lewo, prawo - bez dołu)
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x + popup_width, popup_y), 3)  # Góra
+    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
+    pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
+
+    # Treść - wycentrowana w popup
+    content_y = popup_y + header_height + 50
 
     if selected_videos:
         # Multi-delete
-        draw_text(f"Usunac {len(selected_videos)} zaznaczonych filmow?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
-        draw_text("Ta operacja jest nieodwracalna!", font_small, YELLOW, SCREEN_WIDTH // 2, dialog_y + 180, center=True)
+        draw_text(f"Usunąć {len(selected_videos)} zaznaczonych filmów?", menu_font, WHITE, popup_x + popup_width // 2, content_y, center=True)
+        draw_text("Ta operacja jest nieodwracalna!", font_large, YELLOW, popup_x + popup_width // 2, content_y + 50, center=True)
     elif videos and 0 <= selected_index < len(videos):
         # Single delete
         video = videos[selected_index]
-        draw_text("Usunac ten film?", font_medium, WHITE, SCREEN_WIDTH // 2, dialog_y + 130, center=True)
+        draw_text("Usunąć ten film?", menu_font, WHITE, popup_x + popup_width // 2, content_y, center=True)
 
         name = video.name
         if len(name) > 40:
             name = name[:37] + "..."
-        draw_text(name, font_small, YELLOW, SCREEN_WIDTH // 2, dialog_y + 180, center=True)
-    
-    button_y = dialog_y + 260
-    button_w = 300
-    button_h = 80
-    spacing = 50
-    
-    yes_x = SCREEN_WIDTH // 2 + spacing // 2
-    if confirm_selection == 1:
-        pygame.draw.rect(screen, GREEN, (yes_x, button_y, button_w, button_h), border_radius=15)
-        pygame.draw.rect(screen, YELLOW, (yes_x, button_y, button_w, button_h), 6, border_radius=15)
-    else:
-        pygame.draw.rect(screen, GREEN, (yes_x, button_y, button_w, button_h), border_radius=15)
-        pygame.draw.rect(screen, WHITE, (yes_x, button_y, button_w, button_h), 2, border_radius=15)
-    
-    draw_text("[YES] TAK", font_large, WHITE, yes_x + button_w // 2, button_y + button_h // 2, center=True)
-    
-    no_x = SCREEN_WIDTH // 2 - button_w - spacing // 2
-    if confirm_selection == 0:
-        pygame.draw.rect(screen, RED, (no_x, button_y, button_w, button_h), border_radius=15)
-        pygame.draw.rect(screen, YELLOW, (no_x, button_y, button_w, button_h), 6, border_radius=15)
-    else:
-        pygame.draw.rect(screen, RED, (no_x, button_y, button_w, button_h), border_radius=15)
-        pygame.draw.rect(screen, WHITE, (no_x, button_y, button_w, button_h), 2, border_radius=15)
-    
-    draw_text("[NO] NIE", font_large, WHITE, no_x + button_w // 2, button_y + button_h // 2, center=True)
-    draw_text("Left/Right: Wybierz | OK: Zatwierdz", font_small, GRAY, SCREEN_WIDTH // 2, dialog_y + dialog_height - 40, center=True)
+        draw_text(name, font_large, YELLOW, popup_x + popup_width // 2, content_y + 50, center=True)
+
+    # Przyciski w stylu popup - 2 opcje obok siebie
+    item_height = 80
+    buttons_y = popup_y + header_height + 150
+
+    # Opcje jako lista (dla spójności z innymi popup)
+    options = [
+        {"label": "NIE", "index": 0},
+        {"label": "TAK", "index": 1}
+    ]
+
+    # Pozycje przycisków - obok siebie z odstępem
+    button_spacing = 40
+    button_width = (popup_width - 80 - button_spacing) // 2
+
+    for i, option in enumerate(options):
+        is_selected = (confirm_selection == option["index"])
+        item_x = popup_x + 40 + i * (button_width + button_spacing)
+        item_y = buttons_y
+
+        # Tło zaznaczonego elementu - gradient jak w innych popup
+        if is_selected:
+            rect_x = item_x
+            rect_y = item_y
+            rect_w = button_width
+            rect_h = item_height
+
+            # Kolory gradientu
+            dark_navy = (15, 30, 60)
+            light_blue = (100, 150, 255)
+
+            # Rysuj gradient - górna 1/3 z przejściem
+            gradient_height_grad = rect_h // 3
+            for y_offset in range(rect_h):
+                if y_offset < gradient_height_grad:
+                    # Gradient od jasnego do ciemnego
+                    ratio = y_offset / gradient_height_grad
+                    r = int(light_blue[0] * (1 - ratio) + dark_navy[0] * ratio)
+                    g = int(light_blue[1] * (1 - ratio) + dark_navy[1] * ratio)
+                    b = int(light_blue[2] * (1 - ratio) + dark_navy[2] * ratio)
+                    color = (r, g, b)
+                else:
+                    # Ciemno granatowy dla reszty
+                    color = dark_navy
+
+                pygame.draw.line(screen, color,
+                               (rect_x, rect_y + y_offset),
+                               (rect_x + rect_w, rect_y + y_offset))
+
+            # Białe obramowanie 5px
+            pygame.draw.rect(screen, WHITE, (rect_x, rect_y, rect_w, rect_h), 5)
+            text_color = YELLOW
+        else:
+            # Nieaktywny przycisk - ciemne tło
+            pygame.draw.rect(screen, (30, 30, 30), (item_x, item_y, button_width, item_height))
+            pygame.draw.rect(screen, GRAY, (item_x, item_y, button_width, item_height), 2)
+            text_color = WHITE
+
+        # Tekst opcji
+        display_text = option['label'].upper()
+        draw_text(display_text, menu_font, text_color, item_x + button_width // 2, item_y + item_height // 2 - 10, center=True)
 
 
 # ============================================================================
@@ -6577,7 +6696,7 @@ if __name__ == '__main__':
             elif current_state == STATE_VIDEOS:
                 draw_videos_screen()
             elif current_state == STATE_CONFIRM:
-                draw_videos_screen()
+                draw_videos_screen(hide_buttons=True)
                 draw_confirm_dialog()
             elif current_state == STATE_PLAYING:
                 draw_playing_screen()
@@ -6595,10 +6714,10 @@ if __name__ == '__main__':
                 draw_date_picker()
                 draw_menu_bottom_buttons()  # Przyciski na wierzchu (wysoki z-index)
             elif current_state == STATE_VIDEO_CONTEXT_MENU:
-                draw_videos_screen()
+                draw_videos_screen(hide_buttons=True)
                 draw_video_context_menu()
             elif current_state == STATE_VIDEO_INFO:
-                draw_videos_screen()
+                draw_videos_screen(hide_buttons=True)
                 draw_video_info_dialog()
 
             pygame.display.flip()
