@@ -4941,7 +4941,7 @@ def draw_videos_screen():
             duration_str = "?:??:??"
 
         # Rysuj informacje w nagłówku (tylko jeśli nie jesteśmy w trybie multi-select)
-        header_y = 45
+        header_y = 33
 
         if not multi_select_mode:
             # Normalny tryb - pokaż datę, godzinę i długość z ikoną baterii
