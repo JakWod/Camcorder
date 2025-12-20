@@ -149,6 +149,7 @@ video_fps = 30
 video_path_playing = None
 video_last_frame_time = 0
 video_last_surface = None
+video_audio_ready = False  # NOWY: Czy audio jest gotowe do odtwarzania
 
 # Video Manager
 videos = []
@@ -4104,6 +4105,8 @@ def refresh_videos():
 
     print("[THUMB] Ładowanie miniatur...")
     thumbnails = {}
+    missing_thumbnails = []
+
     for video in videos:
         thumbnail_path = THUMBNAIL_DIR / f"{video.stem}.jpg"
         if thumbnail_path.exists():
@@ -4115,7 +4118,36 @@ def refresh_videos():
                     thumbnails[video.stem] = surface
             except Exception as e:
                 print(f"[WARN] Błąd {video.stem}: {e}")
-    print(f"[OK] {len(thumbnails)} miniatur")
+        else:
+            # Brak miniaturki - dodaj do listy do wygenerowania
+            missing_thumbnails.append(video)
+
+    print(f"[OK] {len(thumbnails)} miniatur załadowanych")
+
+    # Generuj brakujące miniaturki w tle
+    if missing_thumbnails:
+        print(f"[THUMB] Brak {len(missing_thumbnails)} miniaturek - generowanie...")
+
+        def generate_missing_thumbnails():
+            for video in missing_thumbnails:
+                try:
+                    print(f"[THUMB] Generowanie: {video.name}")
+                    if generate_thumbnail(video):
+                        # Po wygenerowaniu, załaduj miniaturkę do pamięci
+                        thumbnail_path = THUMBNAIL_DIR / f"{video.stem}.jpg"
+                        if thumbnail_path.exists():
+                            img = cv2.imread(str(thumbnail_path))
+                            if img is not None:
+                                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                                surface = pygame.surfarray.make_surface(np.transpose(img_rgb, (1, 0, 2)))
+                                thumbnails[video.stem] = surface
+                                print(f"[THUMB] OK: {video.stem}")
+                except Exception as e:
+                    print(f"[THUMB] Błąd generowania {video.stem}: {e}")
+
+        # Uruchom w osobnym wątku aby nie blokować UI
+        thumb_thread = threading.Thread(target=generate_missing_thumbnails, daemon=True)
+        thumb_thread.start()
 
 
 def draw_text(text, font, color, x, y, center=False, bg_color=None, padding=10):
@@ -4736,8 +4768,13 @@ def start_video_playback(video_path):
     """Rozpocznij odtwarzanie - FPS z nazwy pliku"""
     global video_capture, video_current_frame, video_total_frames, video_fps
     global video_path_playing, video_paused, current_state, video_last_frame_time, video_last_surface
+    global video_audio_ready  # NOWY: Flaga gotowości audio
 
     print(f"\n[PLAY] ODTWARZANIE: {video_path.name}")
+
+    # Resetuj flagę audio - ZAPAUZUJ video dopóki audio się nie załaduje
+    video_audio_ready = False
+    video_paused = True
 
     video_capture = cv2.VideoCapture(str(video_path))
     if not video_capture.isOpened():
@@ -4819,47 +4856,94 @@ def start_video_playback(video_path):
 
     video_total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     video_current_frame = 0
-    video_paused = False
+      # NAPRAWIONE: Zapauzuj od razu - odpauzuj dopiero gdy audio będzie gotowe
     video_path_playing = video_path
     video_last_frame_time = time.time()
     video_last_surface = None
 
-    # Ekstraktuj audio do tymczasowego pliku WAV dla pygame.mixer
+    # NAPRAWIONE: Odczytaj pierwszą klatkę aby pokazać ją od razu (zamiast czarnego ekranu)
     try:
-        # Ścieżka do tymczasowego pliku audio (lokalny dysk, nie karta SD)
-        temp_audio_path = THUMBNAIL_DIR / f"temp_playback_audio_{video_path.stem}.wav"
+        ret, first_frame = video_capture.read()
+        if ret and first_frame is not None:
+            frame_rgb = cv2.cvtColor(first_frame, cv2.COLOR_BGR2RGB)
+            video_h, video_w = first_frame.shape[:2]
+            aspect = video_w / video_h
+            screen_aspect = SCREEN_WIDTH / SCREEN_HEIGHT
 
-        # Usuń stary plik tymczasowy jeśli istnieje
-        if temp_audio_path.exists():
-            temp_audio_path.unlink()
+            if aspect > screen_aspect:
+                new_w = SCREEN_WIDTH
+                new_h = int(SCREEN_WIDTH / aspect)
+            else:
+                new_h = SCREEN_HEIGHT
+                new_w = int(SCREEN_HEIGHT * aspect)
 
-        # Użyj ffmpeg do ekstrahowania audio do WAV
-        print(f"[AUDIO] Ekstrakcja audio z MP4...")
-        extract_cmd = [
-            "ffmpeg",
-            "-i", str(video_path),
-            "-vn",  # Bez video
-            "-acodec", "pcm_s16le",  # Kodek WAV
-            "-ar", "44100",  # Sample rate
-            "-ac", "2",  # Stereo
-            "-y",  # Nadpisz jeśli istnieje
-            str(temp_audio_path)
-        ]
-
-        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=10)
-
-        if result.returncode == 0 and temp_audio_path.exists():
-            # Załaduj wyekstrahowany WAV
-            pygame.mixer.music.load(str(temp_audio_path))
-            # NAPRAWIONE: Ustaw głośność na 100% (1.0)
-            pygame.mixer.music.set_volume(1.0)
-            pygame.mixer.music.play()
-            print(f"[AUDIO] Odtwarzanie dźwięku WAV: {temp_audio_path.name} (głośność: 100%)")
-        else:
-            print(f"[WARN] Nie można wyekstrahować audio: {result.stderr}")
-
+            frame_resized = cv2.resize(frame_rgb, (new_w, new_h))
+            frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
+            video_last_surface = (frame_surface, new_w, new_h)
+            video_current_frame = 1  # Pierwsza ramka już odczytana
+            print("[VIDEO] Pierwsza ramka załadowana")
     except Exception as e:
-        print(f"[WARN] Nie można odtworzyć dźwięku: {e}")
+        print(f"[WARN] Nie można odczytać pierwszej ramki: {e}")
+
+    # NAPRAWIONE: Ekstraktuj audio w wątku w tle aby nie blokować GUI
+    def extract_and_play_audio():
+        global video_audio_ready, video_paused, video_last_frame_time, video_current_frame
+        try:
+            # Ścieżka do tymczasowego pliku audio (lokalny dysk, nie karta SD)
+            temp_audio_path = THUMBNAIL_DIR / f"temp_playback_audio_{video_path.stem}.wav"
+
+            # Usuń stary plik tymczasowy jeśli istnieje
+            if temp_audio_path.exists():
+                temp_audio_path.unlink()
+
+            # Użyj ffmpeg do ekstrahowania audio do WAV
+            print(f"[AUDIO] Ekstrakcja audio w tle z MP4...")
+            extract_cmd = [
+                "ffmpeg",
+                "-i", str(video_path),
+                "-vn",  # Bez video
+                "-acodec", "pcm_s16le",  # Kodek WAV
+                "-ar", "44100",  # Sample rate
+                "-ac", "2",  # Stereo
+                "-y",  # Nadpisz jeśli istnieje
+                str(temp_audio_path)
+            ]
+
+            result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=120)  # ZWIĘKSZONY timeout dla dużych plików
+
+            if result.returncode == 0 and temp_audio_path.exists():
+                pygame.mixer.music.load(str(temp_audio_path))
+                pygame.mixer.music.set_volume(1.0)
+                
+                # --- KLUCZOWA POPRAWKA ---
+                # 1. Przewiń wideo fizycznie na klatkę 0
+                video_capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                # 2. Zresetuj licznik klatek interfejsu
+                video_current_frame = 0
+                # 3. Zsynchronizuj czas bazowy z momentem startu
+                video_last_frame_time = time.time()
+                
+                # Uruchom dźwięk od zera
+                pygame.mixer.music.play(start=0.0)
+                
+                video_audio_ready = True
+                video_paused = False  # Odblokuj obraz
+                print(f"[OK] Start od 0:00 - Audio i Video zsynchronizowane")
+            else:
+                print(f"[WARN] Nie można wyekstrahować audio: {result.stderr}")
+                # NOWY: Nawet jeśli audio się nie powiodło, ustaw flagę i odpauzuj (aby nie czekać w nieskończoność)
+                video_audio_ready = True
+                video_paused = False
+
+        except Exception as e:
+            print(f"[WARN] Nie można odtworzyć dźwięku: {e}")
+            # NOWY: Nawet w przypadku błędu, ustaw flagę i odpauzuj
+            video_audio_ready = True
+            video_paused = False
+
+    # Uruchom ekstrakcję audio w wątku w tle
+    audio_thread = threading.Thread(target=extract_and_play_audio, daemon=True)
+    audio_thread.start()
 
     current_state = STATE_PLAYING
     print(f"[OK] Wideo: {video_total_frames} klatek @ {video_fps} FPS")
@@ -4868,7 +4952,10 @@ def start_video_playback(video_path):
 
 def stop_video_playback():
     """Zatrzymaj odtwarzanie"""
-    global video_capture, current_state, video_path_playing, video_last_surface
+    global video_capture, current_state, video_path_playing, video_last_surface, video_audio_ready
+
+    # NOWY: Resetuj flagę audio
+    video_audio_ready = False
 
     if video_capture:
         video_capture.release()
@@ -4947,6 +5034,7 @@ def seek_video(seconds):
 
         # NAPRAWIONE: Synchronizacja audio podczas przewijania
         # Zatrzymaj audio, załaduj od nowa z dokładnej pozycji
+        # NOWY: Synchronizuj tylko jeśli audio jest już gotowe
         try:
             # Oblicz pozycję w sekundach
             target_time_seconds = target_frame / video_fps if video_fps > 0 else 0
@@ -4954,7 +5042,7 @@ def seek_video(seconds):
             # Ścieżka do tymczasowego pliku audio (lokalny dysk, nie karta SD)
             temp_audio_path = THUMBNAIL_DIR / f"temp_playback_audio_{video_path_playing.stem}.wav"
 
-            if temp_audio_path.exists():
+            if video_audio_ready and temp_audio_path.exists():
                 # Zatrzymaj obecne audio
                 pygame.mixer.music.stop()
 
@@ -5169,9 +5257,6 @@ def draw_videos_screen(hide_buttons=False):
         else:
             # Tryb zaznaczania - pokaż napis "TRYB ZAZNACZANIA"
             draw_text_with_outline("TRYB ZAZNACZANIA", font_large, YELLOW, BLACK, SCREEN_WIDTH // 2, header_y, center=True)
-    else:
-        # Brak filmów - pokaż standardowy nagłówek
-        draw_text("[VIDEOS] NAGRANE FILMY", font_large, WHITE, SCREEN_WIDTH // 2, 50, center=True)
 
     # Bateria w prawym górnym rogu (zawsze pokazywana)
     battery_width = 70
@@ -5279,8 +5364,23 @@ def draw_videos_screen(hide_buttons=False):
         pygame.draw.polygon(screen, YELLOW, lightning_points)
 
     if not videos:
-        draw_text("[EMPTY] Brak filmów", font_medium, GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60, center=True)
-        draw_text("Zamknij i nacisnij Record", font_small, DARK_GRAY, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
+        # Napis "NAGRANE FILMY" w lewym górnym rogu (tylko gdy brak filmów)
+        draw_text_with_outline("NAGRANE FILMY", font_large, WHITE, BLACK, 40, 33)
+
+        # Komunikat gdy brak filmów - wycentrowany na ekranie (nad dolnym panelem)
+        message_y = (header_height + (SCREEN_HEIGHT - 80 - header_height)) // 2
+
+        # Pierwszy wiersz: "Brak wideo do odtworzenia"
+        draw_text_with_outline("Brak wideo do odtworzenia", font_large, WHITE, BLACK,
+                              SCREEN_WIDTH // 2, message_y - 60, center=True)
+
+        # Drugi wiersz: "Nagraj nowy materiał, aby pojawił się"
+        draw_text_with_outline("Nagraj nowy materiał, aby pojawił się", font_large, WHITE, BLACK,
+                              SCREEN_WIDTH // 2, message_y, center=True)
+
+        # Trzeci wiersz: "w tym miejscu."
+        draw_text_with_outline("w tym miejscu.", font_large, WHITE, BLACK,
+                              SCREEN_WIDTH // 2, message_y + 60, center=True)
     else:
         # Ustawienia siatki
         cols = 3
@@ -5771,7 +5871,11 @@ def draw_playing_screen():
         draw_text("[ERROR] Blad odtwarzania", font_large, RED, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2, center=True)
         return
 
-    if not video_paused:
+    # NOWY: Odtwarzaj video tylko gdy audio jest gotowe (lub gdy audio jest wyłączone w ustawieniach)
+    audio_enabled = camera_settings.get("audio_recording", True)
+    can_play = (not video_paused) and (video_audio_ready or not audio_enabled)
+
+    if can_play:
         current_time = time.time()
         frame_interval = 1.0 / video_fps
         elapsed = current_time - video_last_frame_time
@@ -5825,147 +5929,38 @@ def draw_playing_screen():
         except:
             pass
 
-    # === GÓRNY NAGŁÓWEK - Data, godzina i długość filmu ===
-    header_height = 95
+    # NOWY: Wskaźnik ładowania audio - wyświetlaj gdy audio jeszcze się nie załadowało
+    if not video_audio_ready:
+        # Półprzezroczyste tło
+        loading_overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        loading_overlay.fill((0, 0, 0, 180))
+        screen.blit(loading_overlay, (0, 0))
 
-    # Gradient tła jak w menu
-    blue_gray_top = (70, 90, 110)
-    gradient_height = header_height
-    start_color = BLACK
-    end_color = blue_gray_top
+        # Tekst ładowania na środku ekranu
+        loading_text = "ŁADOWANIE..."
+        draw_text_with_outline(loading_text, font_large, YELLOW, BLACK, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 40, center=True)
 
-    for y in range(gradient_height):
-        ratio = y / gradient_height
-        r = int(start_color[0] * (1 - ratio) + end_color[0] * ratio)
-        g = int(start_color[1] * (1 - ratio) + end_color[1] * ratio)
-        b = int(start_color[2] * (1 - ratio) + end_color[2] * ratio)
-        color = (r, g, b)
-        pygame.draw.line(screen, color, (0, y), (SCREEN_WIDTH, y))
+        # Animowany pasek ładowania
+        bar_width = 600
+        bar_height = 20
+        bar_x = (SCREEN_WIDTH - bar_width) // 2
+        bar_y = SCREEN_HEIGHT // 2 + 20
 
-    # Ramka nagłówka - tylko dolna krawędź
-    pygame.draw.line(screen, LIGHT_BLUE, (0, header_height), (SCREEN_WIDTH, header_height), 3)
+        # Tło paska
+        pygame.draw.rect(screen, DARK_GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=10)
 
-    # Pobierz informacje o pliku
-    if video_path_playing:
-        try:
-            # Parsuj nazwę pliku: video_YYYYMMDD_HHMMSS_XXfps.mp4
-            filename_parts = video_path_playing.stem.split('_')
-            if len(filename_parts) >= 3:
-                date_part = filename_parts[1]  # YYYYMMDD
-                time_part = filename_parts[2]  # HHMMSS
+        # Animowana wypełniona część (pulsująca)
+        pulse_speed = 2.0
+        pulse_phase = (time.time() * pulse_speed) % 1.0
+        fill_width = int(bar_width * pulse_phase)
+        pygame.draw.rect(screen, BLUE, (bar_x, bar_y, fill_width, bar_height), border_radius=10)
 
-                # Formatuj datę
-                year = date_part[0:4]
-                month = date_part[4:6]
-                day = date_part[6:8]
-                date_str = f"{day}/{month}/{year}"
+        # Białe obramowanie
+        pygame.draw.rect(screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 3, border_radius=10)
 
-                # Formatuj godzinę
-                hour = time_part[0:2]
-                minute = time_part[2:4]
-                second = time_part[4:6]
-                time_str = f"{hour}:{minute}:{second}"
-            else:
-                # Fallback - użyj daty modyfikacji pliku
-                file_mtime = video_path_playing.stat().st_mtime
-                date_obj = datetime.fromtimestamp(file_mtime)
-                date_str = date_obj.strftime("%d/%m/%Y")
-                time_str = date_obj.strftime("%H:%M:%S")
-        except:
-            date_str = "??/??/????"
-            time_str = "??:??:??"
-
-        # Oblicz długość filmu
-        total_time_sec = video_total_frames / video_fps if video_fps > 0 else 0
-        duration_hours = int(total_time_sec // 3600)
-        duration_minutes = int((total_time_sec % 3600) // 60)
-        duration_seconds = int(total_time_sec % 60)
-        duration_str = f"{duration_hours}:{duration_minutes:02d}:{duration_seconds:02d}"
-
-        # Rysuj informacje w nagłówku
-        header_y = 45
-
-        # Data po lewej
-        draw_text(date_str, font_large, WHITE, 40, header_y)
-
-        # Godzina po środku
-        draw_text(time_str, font_large, YELLOW, SCREEN_WIDTH // 2, header_y, center=True)
-
-        # Długość po prawej
-        duration_text_surface = font_large.render(duration_str, True, WHITE)
-        duration_text_width = duration_text_surface.get_width()
-        draw_text(duration_str, font_large, WHITE, SCREEN_WIDTH - duration_text_width - 40, header_y)
-
-    # === PANEL DOLNY - Przyciski jak w menu ===
-    panel_height = 80
-    panel_y = SCREEN_HEIGHT - panel_height
-
-    # Ciemniejszy odcień niebiesko-szarego
-    dark_blue_gray = (40, 50, 60)
-    pygame.draw.rect(screen, dark_blue_gray, (0, panel_y, SCREEN_WIDTH, panel_height))
-
-    # Dodaj liniowy gradient - co 15 pikseli jasność +2, grubość linii -1 (start: 10px)
-    line_spacing = 15
-    brightness_increment = 2
-    initial_line_thickness = 10
-    cycle_length = initial_line_thickness + 1
-
-    current_y = panel_y + line_spacing
-    line_index = 0
-
-    while current_y < panel_y + panel_height:
-        cyclic_index = line_index % cycle_length
-        brightness_boost = cyclic_index * brightness_increment
-        line_color = (
-            min(255, dark_blue_gray[0] + brightness_boost),
-            min(255, dark_blue_gray[1] + brightness_boost),
-            min(255, dark_blue_gray[2] + brightness_boost)
-        )
-        line_thickness = initial_line_thickness - cyclic_index
-
-        if line_thickness > 0:
-            for i in range(line_thickness):
-                pygame.draw.line(screen, line_color,
-                               (10, current_y + i),
-                               (SCREEN_WIDTH - 10, current_y + i))
-
-        current_y += line_spacing
-        line_index += 1
-
-    # Ramka panelu - tylko górna krawędź
-    pygame.draw.line(screen, LIGHT_BLUE, (0, panel_y), (SCREEN_WIDTH, panel_y), 3)
-
-    # Dolne przyciski - styl jak w menu
-    button_y = panel_y + 15
-    exit_x = 40
-    exit_y = button_y
-
-    # Lewy dolny róg: WYJDŹ / VIDEOS
-    draw_text_with_outline("WYJDŹ", font_large, WHITE, BLACK, exit_x, exit_y)
-
-    videos_button_x = exit_x + 150
-    videos_button_width = 140
-    videos_button_height = 45
-    pygame.draw.rect(screen, WHITE, (videos_button_x + 10, exit_y - 5, videos_button_width, videos_button_height),
-                     border_radius=10)
-    draw_text("VIDEOS", font_large, BLACK, videos_button_x + 10 + videos_button_width // 2,
-              exit_y + videos_button_height // 2 - 5, center=True)
-
-    # Prawy dolny róg: PAUZA / OK
-    ok_button_width = 100
-    ok_button_x = SCREEN_WIDTH - 40 - ok_button_width
-    ok_button_height = 45
-    pygame.draw.rect(screen, WHITE, (ok_button_x + 13, exit_y - 5, ok_button_width - 25, ok_button_height),
-                     border_radius=10)
-    draw_text("OK", font_large, BLACK, ok_button_x + ok_button_width // 2,
-              exit_y + ok_button_height // 2 - 5, center=True)
-
-    pause_x = ok_button_x - 150
-    draw_text_with_outline("PAUZA", font_large, WHITE, BLACK, pause_x, exit_y)
-
-    # === PROGRESS BAR - pomiędzy nagłówkiem a dolnym panelem ===
+    # === PROGRESS BAR - na dole ekranu ===
     progress_margin = 50
-    progress_y = SCREEN_HEIGHT - panel_height - 80  # 80px nad dolnym panelem
+    progress_y = SCREEN_HEIGHT - 100  # 100px od dolnej krawędzi
     progress_width = SCREEN_WIDTH - progress_margin * 2
     progress_x = progress_margin
     progress_height = 15
@@ -6813,7 +6808,7 @@ if __name__ == '__main__':
     print("\n" + "="*70)
     print("[SYSTEM] SYSTEM KAMERA - RASPBERRY PI 5")
     print("="*70)
-    print("[MAIN] Kamera | [REC] Record | [VIDEOS] Videos | [CONFIG] Menu | [ZOOM] +/- Zoom")
+    print("[MAIN] Kamera | [REC] Record | Videos | [CONFIG] Menu | [ZOOM] +/- Zoom")
     print("="*70 + "\n")
 
     clock = pygame.time.Clock()
