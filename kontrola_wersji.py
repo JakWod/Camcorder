@@ -151,6 +151,11 @@ video_last_frame_time = 0
 video_last_surface = None
 video_audio_ready = False  # NOWY: Czy audio jest gotowe do odtwarzania
 playback_loading_start_time = 0  # Czas rozpoczęcia ładowania wideo
+video_current_volume = 1.0  # Zachowana głośność (0.0 - 1.0)
+last_ui_interaction_time = 0  # Czas ostatniej interakcji z UI (do auto-ukrywania)
+UI_HIDE_DELAY = 3.0  # Sekundy bezczynności przed ukryciem UI
+last_volume_change_time = 0  # Czas ostatniej zmiany głośności (do pokazania wskaźnika)
+VOLUME_INDICATOR_DURATION = 2.0  # Sekundy wyświetlania wskaźnika głośności
 
 # Video Manager
 videos = []
@@ -4769,7 +4774,7 @@ def start_video_playback(video_path):
     """Rozpocznij odtwarzanie - FPS z nazwy pliku"""
     global video_capture, video_current_frame, video_total_frames, video_fps
     global video_path_playing, video_paused, current_state, video_last_frame_time, video_last_surface
-    global video_audio_ready, playback_loading_start_time  # NOWY: Flaga gotowości audio
+    global video_audio_ready, playback_loading_start_time, last_ui_interaction_time  # NOWY: Flaga gotowości audio
 
     print(f"\n[PLAY] ODTWARZANIE: {video_path.name}")
 
@@ -4777,6 +4782,8 @@ def start_video_playback(video_path):
     video_audio_ready = False
     video_paused = True
     playback_loading_start_time = time.time()
+    # Inicjalizuj czas interakcji (pokaż UI na początku)
+    last_ui_interaction_time = time.time()
 
     video_capture = cv2.VideoCapture(str(video_path))
     if not video_capture.isOpened():
@@ -4988,8 +4995,11 @@ def stop_video_playback():
 
 def toggle_pause():
     """Przełącz pauzę"""
-    global video_paused, video_last_frame_time
+    global video_paused, video_last_frame_time, last_ui_interaction_time
     video_paused = not video_paused
+
+    # Odnotuj interakcję z UI
+    last_ui_interaction_time = time.time()
 
     # NAPRAWIONE: Pauzuj/wznów dźwięk
     try:
@@ -5011,7 +5021,7 @@ def toggle_pause():
 def seek_video(seconds):
     """Przewiń wideo"""
     global video_current_frame, video_capture, video_last_frame_time
-    global video_path_playing, video_last_surface, video_paused
+    global video_path_playing, video_last_surface, video_paused, video_current_volume, last_ui_interaction_time
 
     if not video_capture:
         return
@@ -5022,6 +5032,9 @@ def seek_video(seconds):
 
     target_frame = video_current_frame + frames_to_move
     target_frame = max(0, min(target_frame, video_total_frames - 1))
+
+    # Odnotuj interakcję z UI
+    last_ui_interaction_time = time.time()
 
     was_paused = video_paused
 
@@ -5050,7 +5063,8 @@ def seek_video(seconds):
 
                 # Załaduj ponownie
                 pygame.mixer.music.load(str(temp_audio_path))
-                pygame.mixer.music.set_volume(1.0)
+                # NAPRAWIONE: Zachowaj poprzednią głośność zamiast resetować do 1.0
+                pygame.mixer.music.set_volume(video_current_volume)
 
                 # Uruchom z dokładnej pozycji (set_pos PRZED play dla lepszej synchronizacji)
                 pygame.mixer.music.play(start=target_time_seconds)
@@ -5962,29 +5976,116 @@ def draw_playing_screen():
             # Białe obramowanie
             pygame.draw.rect(screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 3, border_radius=10)
 
-    # === PROGRESS BAR - na dole ekranu ===
-    progress_margin = 50
-    progress_y = SCREEN_HEIGHT - 100  # 100px od dolnej krawędzi
-    progress_width = SCREEN_WIDTH - progress_margin * 2
-    progress_x = progress_margin
-    progress_height = 15
+    # === PROGRESS BAR - na dole ekranu (ukryj po bezczynności, ale zawsze widoczny podczas pauzy) ===
+    time_since_interaction = time.time() - last_ui_interaction_time
+    show_progress_bar = video_paused or (time_since_interaction < UI_HIDE_DELAY)
 
-    pygame.draw.rect(screen, DARK_GRAY, (progress_x, progress_y, progress_width, progress_height), border_radius=8)
+    if show_progress_bar:
+        progress_margin = 50
+        progress_y = SCREEN_HEIGHT - 100  # 100px od dolnej krawędzi
+        progress_width = SCREEN_WIDTH - progress_margin * 2
+        progress_x = progress_margin
+        progress_height = 15
 
-    if video_total_frames > 0:
-        progress_ratio = video_current_frame / video_total_frames
-        filled_width = int(progress_width * progress_ratio)
-        if filled_width > 0:
-            pygame.draw.rect(screen, BLUE, (progress_x, progress_y, filled_width, progress_height), border_radius=8)
+        pygame.draw.rect(screen, DARK_GRAY, (progress_x, progress_y, progress_width, progress_height), border_radius=8)
 
-    pygame.draw.rect(screen, WHITE, (progress_x, progress_y, progress_width, progress_height), 2, border_radius=8)
+        if video_total_frames > 0:
+            progress_ratio = video_current_frame / video_total_frames
+            filled_width = int(progress_width * progress_ratio)
+            if filled_width > 0:
+                pygame.draw.rect(screen, BLUE, (progress_x, progress_y, filled_width, progress_height), border_radius=8)
 
-    # Czas aktualny / całkowity - poniżej progress bara
-    current_time_sec = video_current_frame / video_fps if video_fps > 0 else 0
-    total_time_sec = video_total_frames / video_fps if video_fps > 0 else 0
+        pygame.draw.rect(screen, WHITE, (progress_x, progress_y, progress_width, progress_height), 2, border_radius=8)
 
-    time_text = f"{format_time(current_time_sec)} / {format_time(total_time_sec)}"
-    draw_text(time_text, font_small, WHITE, SCREEN_WIDTH // 2, progress_y + 30, center=True)
+        # Czas aktualny / całkowity - poniżej progress bara
+        current_time_sec = video_current_frame / video_fps if video_fps > 0 else 0
+        total_time_sec = video_total_frames / video_fps if video_fps > 0 else 0
+
+        time_text = f"{format_time(current_time_sec)} / {format_time(total_time_sec)}"
+        draw_text(time_text, font_small, WHITE, SCREEN_WIDTH // 2, progress_y + 30, center=True)
+
+    # === SYMBOL PAUZY - na środku ekranu (tylko gdy zapauzowane I audio jest gotowe) ===
+    if video_paused and video_audio_ready:
+        pause_icon_size = 120
+        pause_bar_width = 35
+        pause_bar_height = pause_icon_size
+        pause_spacing = 25
+
+        # Pozycja na środku ekranu
+        center_x = SCREEN_WIDTH // 2
+        center_y = SCREEN_HEIGHT // 2
+
+        # Lewy pasek
+        left_bar_x = center_x - pause_spacing - pause_bar_width
+        left_bar_y = center_y - pause_bar_height // 2
+
+        # Prawy pasek
+        right_bar_x = center_x + pause_spacing
+        right_bar_y = center_y - pause_bar_height // 2
+
+        # Rysuj z półprzezroczystym tłem
+        pause_bg = pygame.Surface((pause_icon_size * 2, pause_icon_size * 2), pygame.SRCALPHA)
+        pause_bg.fill((0, 0, 0, 150))
+        screen.blit(pause_bg, (center_x - pause_icon_size, center_y - pause_icon_size))
+
+        # NAPRAWIONE: Czarny outline (większy prostokąt z tyłu)
+        outline_width = 4
+        pygame.draw.rect(screen, BLACK,
+                        (left_bar_x - outline_width, left_bar_y - outline_width,
+                         pause_bar_width + outline_width * 2, pause_bar_height + outline_width * 2))
+        pygame.draw.rect(screen, BLACK,
+                        (right_bar_x - outline_width, right_bar_y - outline_width,
+                         pause_bar_width + outline_width * 2, pause_bar_height + outline_width * 2))
+
+        # Rysuj białe paski pauzy (bez zaokrągleń - usunięto border_radius)
+        pygame.draw.rect(screen, WHITE, (left_bar_x, left_bar_y, pause_bar_width, pause_bar_height))
+        pygame.draw.rect(screen, WHITE, (right_bar_x, right_bar_y, pause_bar_width, pause_bar_height))
+
+    # === WSKAŹNIK GŁOŚNOŚCI - pojawia się na 2 sekundy po zmianie (kolumny bez ramki) ===
+    time_since_volume_change = time.time() - last_volume_change_time
+    if time_since_volume_change < VOLUME_INDICATOR_DURATION:
+        # Pozycja w prawym górnym rogu
+        indicator_width = 280
+        indicator_height = 100
+        indicator_x = SCREEN_WIDTH - indicator_width - 50
+        indicator_y = 50
+
+        # Tekst głośności (procent)
+        volume_percent = int(video_current_volume * 100)
+        volume_text = f"VOL: {volume_percent}%"
+        text_y = indicator_y + 15
+        draw_text(volume_text, font_large, WHITE, indicator_x + indicator_width // 2, text_y, center=True)
+
+        # NOWY DESIGN: Kolumny od najmniejszej do największej (10 kolumn)
+        num_columns = 10
+        column_spacing = 8
+        total_spacing = column_spacing * (num_columns - 1)
+        available_width = indicator_width - 60  # Marginesy
+        column_base_width = (available_width - total_spacing) // num_columns
+
+        columns_start_x = indicator_x + 30
+        columns_bottom_y = indicator_y + indicator_height - 20
+        max_column_height = 50
+
+        # Oblicz ile kolumn powinno być zapalonych
+        active_columns = int((volume_percent / 100.0) * num_columns)
+
+        for i in range(num_columns):
+            # Wysokość kolumny rośnie liniowo od lewej do prawej
+            column_height = int(max_column_height * (i + 1) / num_columns)
+            column_x = columns_start_x + i * (column_base_width + column_spacing)
+            column_y = columns_bottom_y - column_height
+
+            # Kolor kolumny - białe linie dla aktywnych, ciemne dla nieaktywnych
+            if i < active_columns:
+                column_color = WHITE
+            else:
+                # Nieaktywna kolumna - ciemny szary
+                column_color = (50, 50, 50)
+
+            # Rysuj kolumnę (bez ramki, ostre krawędzie)
+            pygame.draw.rect(screen, column_color,
+                           (column_x, column_y, column_base_width, column_height))
 
 
 def draw_confirm_dialog():
@@ -6460,7 +6561,7 @@ def handle_delete():
 
 
 def handle_up():
-    global video_context_menu_selection, last_videos_scroll
+    global video_context_menu_selection, last_videos_scroll, video_current_volume, last_volume_change_time
     if current_state == STATE_VIDEOS:
         current_time = time.time()
         if current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
@@ -6468,8 +6569,11 @@ def handle_up():
             last_videos_scroll = current_time
     elif current_state == STATE_PLAYING:
         current_volume = pygame.mixer.music.get_volume()
-        new_volume = min(1.0, current_volume + 0.1)
+        new_volume = min(1.0, current_volume + 0.05)
         pygame.mixer.music.set_volume(new_volume)
+        # Zapisz aktualną głośność i czas zmiany
+        video_current_volume = new_volume
+        last_volume_change_time = time.time()
         print(f"[VOL] Głośność UP: {int(new_volume * 100)}%")
     elif current_state == STATE_MENU:
         menu_navigate_up()
@@ -6484,7 +6588,7 @@ def handle_up():
 
 
 def handle_down():
-    global video_context_menu_selection, last_videos_scroll
+    global video_context_menu_selection, last_videos_scroll, video_current_volume, last_volume_change_time
     if current_state == STATE_VIDEOS:
         current_time = time.time()
         if current_time - last_videos_scroll >= VIDEOS_SCROLL_DELAY:
@@ -6492,8 +6596,11 @@ def handle_down():
             last_videos_scroll = current_time
     elif current_state == STATE_PLAYING:
         current_volume = pygame.mixer.music.get_volume()
-        new_volume = max(0.0, current_volume - 0.1)
+        new_volume = max(0.0, current_volume - 0.05)
         pygame.mixer.music.set_volume(new_volume)
+        # Zapisz aktualną głośność i czas zmiany
+        video_current_volume = new_volume
+        last_volume_change_time = time.time()
         print(f"[VOL] Głośność DOWN: {int(new_volume * 100)}%")
     elif current_state == STATE_MENU:
         menu_navigate_down()
@@ -6882,22 +6989,35 @@ if __name__ == '__main__':
                 else:
                     hold_start_left = None
 
+                # NAPRAWIONE: Płynne przyspieszenie przewijania - każda sekunda dodaje ~15% do prędkości
+                # Prędkość bazowa zależy od długości filmiku
                 if is_button_pressed('RIGHT'):
-                    if hold_start_right is not None and current_time - hold_start_right >= 4 and current_time - hold_start_right < 10:
-                        seek_video(1.0)
-                    elif hold_start_right is not None and current_time - hold_start_right >= 10:
-                        seek_video(2.5)
-                    else:
-                        seek_video(0.5)
+                    hold_duration = current_time - hold_start_right if hold_start_right is not None else 0
+                    # Oblicz długość filmiku w sekundach
+                    video_duration_sec = video_total_frames / video_fps if video_fps > 0 else 60
+                    # Bazowa prędkość skalowana do długości filmiku
+                    # Krótkie filmiki (< 60s): base_speed = 0.5s
+                    # Średnie filmiki (60-300s): base_speed = 0.5-2.5s
+                    # Długie filmiki (> 300s): base_speed = 2.5s+
+                    base_speed = 0.5 + (video_duration_sec / 120.0)  # Wzrost bazowej prędkości z długością
+                    base_speed = min(base_speed, 5.0)  # Maksymalnie 5s bazowo
+                    speed_multiplier = 1.0 + (hold_duration * 0.15)  # 15% za sekundę
+                    speed_multiplier = min(speed_multiplier, 2.0)  # Maksymalnie 2x prędkości bazowej
+                    seek_speed = base_speed * speed_multiplier
+                    seek_video(seek_speed)
                     last_continuous_seek = current_time
 
                 elif is_button_pressed('LEFT'):
-                    if hold_start_left is not None and 4 <= current_time - hold_start_left and 10 > current_time - hold_start_left:
-                        seek_video(-1.0)
-                    elif hold_start_left is not None and current_time - hold_start_left >= 10:
-                        seek_video(-2.5)
-                    else:
-                        seek_video(-0.5)
+                    hold_duration = current_time - hold_start_left if hold_start_left is not None else 0
+                    # Oblicz długość filmiku w sekundach
+                    video_duration_sec = video_total_frames / video_fps if video_fps > 0 else 60
+                    # Bazowa prędkość skalowana do długości filmiku
+                    base_speed = 0.5 + (video_duration_sec / 120.0)  # Wzrost bazowej prędkości z długością
+                    base_speed = min(base_speed, 5.0)  # Maksymalnie 5s bazowo
+                    speed_multiplier = 1.0 + (hold_duration * 0.15)  # 15% za sekundę
+                    speed_multiplier = min(speed_multiplier, 2.0)  # Maksymalnie 2x prędkości bazowej
+                    seek_speed = base_speed * speed_multiplier
+                    seek_video(-seek_speed)
                     last_continuous_seek = current_time
 
             if current_state == STATE_MAIN:
