@@ -348,7 +348,7 @@ def find_sd_card():
         for sd_dir in mounted_dirs:
             try:
                 if os.access(str(sd_dir), os.W_OK):
-                    print(f"[OK] Wykryto kartę SD: {sd_dir}")
+                    # print(f"[OK] Wykryto kartę SD: {sd_dir}")
                     return sd_dir
             except:
                 continue
@@ -1180,12 +1180,15 @@ def merge_audio_video(video_path, audio_path):
                 temp_output.unlink()
             return False
 
-        # Zamień pliki
-        video_path.unlink()
-        temp_output.rename(video_path)
+        # Zamień pliki - użyj shutil.move dla operacji między różnymi systemami plików
+        print(f"[MERGE] Przenoszenie {temp_output.stat().st_size / (1024*1024):.1f} MB na kartę SD...")
+        video_path.unlink()  # Usuń stary plik
+        shutil.move(str(temp_output), str(video_path))  # Przenieś nowy plik (działa między różnymi filesystemami)
+        print(f"[MERGE] Plik przeniesiony na kartę SD")
 
         # Usuń plik audio
         audio_path.unlink()
+        print(f"[MERGE] Plik audio usunięty")
 
         print(f"[OK] Audio i video połączone")
         return True
@@ -1618,10 +1621,12 @@ def add_date_overlay_to_video(video_path):
         
         print(f"[OK] FPS: {output_fps:.2f} (oczekiwano: {original_fps:.2f})")
         
-        # Zamiana plików
-        video_path.unlink()
-        temp_file.rename(video_path)
-        
+        # Zamiana plików - użyj shutil.move dla operacji między różnymi systemami plików
+        print(f"[DATE] Przenoszenie {temp_file.stat().st_size / (1024*1024):.1f} MB na kartę SD...")
+        video_path.unlink()  # Usuń stary plik
+        shutil.move(str(temp_file), str(video_path))  # Przenieś nowy plik (działa między różnymi filesystemami)
+        print(f"[DATE] Plik przeniesiony na kartę SD")
+
         print(f"[OK] Data dodana pomyślnie")
         return True
         
@@ -4685,12 +4690,20 @@ def stop_recording():
                             # Połącz audio i video
                             if saved_audio_file and saved_audio_file.exists():
                                 print("[MERGE] Łączenie audio z video...")
-                                merge_audio_video(saved_file, saved_audio_file)
+                                merge_success = merge_audio_video(saved_file, saved_audio_file)
+                                if not merge_success:
+                                    print("[ERROR] Nie udało się połączyć audio z video!")
+                                    # Usuń plik audio, jeśli merge się nie udał
+                                    if saved_audio_file.exists():
+                                        saved_audio_file.unlink()
+                                        print("[CLEANUP] Usunięto nieudany plik audio")
 
-                            # Dodaj datę jeśli włączona
-                            if camera_settings.get("show_date", False):
+                            # Dodaj datę jeśli włączona (tylko jeśli plik wideo nadal istnieje)
+                            if saved_file.exists() and camera_settings.get("show_date", False):
                                 print("[DATE] Dodawanie daty...")
-                                add_date_overlay_to_video(saved_file)
+                                date_success = add_date_overlay_to_video(saved_file)
+                                if not date_success:
+                                    print("[ERROR] Nie udało się dodać daty do video!")
 
                             print("[OK] Przetwarzanie zakończone")
                     else:

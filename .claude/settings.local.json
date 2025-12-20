@@ -4,7 +4,11 @@
       "Bash(python -m py_compile:*)",
       "Bash(dir:*)",
       "Bash(findstr:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(systemctl --user mask:*)",
+      "Bash(sudo killall:*)",
+      "Bash(sudo bash -c 'cat > /etc/udev/rules.d/85-no-automount.rules << EOF\n# Wyłącz automatyczne montowanie dla wszystkich urządzeń USB\nACTION==\"\"add\"\", SUBSYSTEMS==\"\"usb\"\", ENV{UDISKS_AUTO}=\"\"0\"\"\nACTION==\"\"add\"\", SUBSYSTEMS==\"\"usb\"\", ENV{UDISKS_IGNORE}=\"\"1\"\"\nEOF')",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []
