@@ -30,11 +30,13 @@ import struct
 # KONFIGURACJA
 # ============================================================================
 
-VIDEO_DIR = Path("/home/pi/camera_project")
-VIDEO_DIR.mkdir(exist_ok=True)
-THUMBNAIL_DIR = VIDEO_DIR / "thumbnails"
-THUMBNAIL_DIR.mkdir(exist_ok=True)
-CONFIG_FILE = VIDEO_DIR / "camera_config.json"
+# Katalogi
+THUMBNAIL_DIR = Path("/home/pi/camera_project/thumbnails")  # Lokalny dysk - miniaturki
+THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = Path("/home/pi/camera_project/camera_config.json")  # Lokalny dysk - config
+
+# VIDEO_DIR będzie ustawiony dynamicznie przez find_sd_card()
+VIDEO_DIR = None
 
 # GPIO Pins - Matryca 4x4
 # Kolumny (outputs)
@@ -157,6 +159,15 @@ selected_videos = set()  # Multi-select: zestaw indeksów zaznaczonych filmów
 video_context_menu_selection = 0  # Wybór w menu kontekstowym
 video_info_index = 0  # Indeks filmu do wyświetlenia informacji
 multi_select_mode = False  # Tryb zaznaczania wielu filmów
+
+# Komunikaty błędów
+error_message = None
+error_message_time = 0
+ERROR_DISPLAY_DURATION = 3.0  # Sekundy
+
+# Monitorowanie karty SD
+last_sd_check_time = 0
+SD_CHECK_INTERVAL = 2.0  # Sprawdzaj co 2 sekundy
 
 # Pygame
 font_large = None
@@ -314,10 +325,99 @@ VIDEOS_SCROLL_DELAY = 0.25
 # FUNKCJE SD CARD
 # ============================================================================
 
+def find_sd_card():
+    """
+    Wykrywa pierwszą dostępną kartę SD zamontowaną w /media/pi/
+    Zwraca Path do katalogu lub None
+    """
+    media_dir = Path("/media/pi")
+
+    if not media_dir.exists():
+        print("[WARN] Katalog /media/pi nie istnieje")
+        return None
+
+    try:
+        # Szukaj wszystkich zamontowanych katalogów
+        mounted_dirs = [d for d in media_dir.iterdir() if d.is_dir()]
+
+        if not mounted_dirs:
+            print("[WARN] Brak zamontowanych kart SD w /media/pi/")
+            return None
+
+        # Sprawdź który z katalogów jest zapisywalny
+        for sd_dir in mounted_dirs:
+            try:
+                if os.access(str(sd_dir), os.W_OK):
+                    print(f"[OK] Wykryto kartę SD: {sd_dir}")
+                    return sd_dir
+            except:
+                continue
+
+        print("[WARN] Znaleziono karty SD, ale żadna nie jest zapisywalna")
+        return None
+
+    except Exception as e:
+        print(f"[ERROR] Błąd wykrywania karty SD: {e}")
+        return None
+
+
+def sync_thumbnails_with_videos():
+    """
+    Synchronizuje miniaturki z filmami:
+    - Usuwa miniaturki dla których nie ma filmu
+    - Generuje brakujące miniaturki
+    """
+    global VIDEO_DIR, THUMBNAIL_DIR
+
+    if not VIDEO_DIR or not VIDEO_DIR.exists():
+        print("[WARN] VIDEO_DIR niedostępny, pomijam synchronizację")
+        return
+
+    print("\n" + "="*70)
+    print("[SYNC] SYNCHRONIZACJA MINIATUREK")
+    print("="*70)
+
+    # Pobierz listę filmów i miniaturek
+    video_files = set(VIDEO_DIR.glob("*.mp4"))
+    video_stems = {v.stem for v in video_files}
+
+    thumbnail_files = set(THUMBNAIL_DIR.glob("*.jpg"))
+    thumbnail_stems = {t.stem for t in thumbnail_files}
+
+    print(f"[INFO] Filmów: {len(video_files)}, Miniaturek: {len(thumbnail_files)}")
+
+    # Usuń osierocone miniaturki (bez odpowiadającego filmu)
+    orphaned = thumbnail_stems - video_stems
+    if orphaned:
+        print(f"[SYNC] Usuwam {len(orphaned)} osieroconych miniaturek...")
+        for stem in orphaned:
+            thumb_path = THUMBNAIL_DIR / f"{stem}.jpg"
+            try:
+                thumb_path.unlink()
+                print(f"  - Usunięto: {stem}.jpg")
+            except Exception as e:
+                print(f"  - Błąd usuwania {stem}.jpg: {e}")
+    else:
+        print("[OK] Brak osieroconych miniaturek")
+
+    # Znajdź filmy bez miniaturek
+    missing = video_stems - thumbnail_stems
+    if missing:
+        print(f"[SYNC] Generuję {len(missing)} brakujących miniaturek...")
+        for stem in missing:
+            video_path = VIDEO_DIR / f"{stem}.mp4"
+            print(f"  - Generowanie: {stem}.mp4")
+            generate_thumbnail(video_path)
+    else:
+        print("[OK] Wszystkie miniaturki istnieją")
+
+    print("="*70 + "\n")
+
+
 def check_sd_card():
     """Sprawdź czy karta SD jest dostępna"""
     try:
-        return VIDEO_DIR.exists() and os.access(str(VIDEO_DIR), os.W_OK)
+        return VIDEO_DIR and VIDEO_DIR.exists() and os.access(str(VIDEO_DIR), os.W_OK)
     except:
         return False
 
@@ -325,6 +425,8 @@ def check_sd_card():
 def get_available_space_gb():
     """Pobierz dostępne miejsce na karcie w GB"""
     try:
+        if not VIDEO_DIR:
+            return 0
         stat = shutil.disk_usage(str(VIDEO_DIR))
         return stat.free / (1024**3)  # Konwersja na GB
     except:
@@ -333,9 +435,9 @@ def get_available_space_gb():
 
 def get_recording_time_estimate():
     """Oblicz szacowany czas nagrywania na podstawie dostępnego miejsca"""
-    if not check_sd_card():
+    if not check_sd_card() or not VIDEO_DIR:
         return "-- : --"
-    
+
     try:
         free_space_bytes = shutil.disk_usage(str(VIDEO_DIR)).free
         
@@ -1046,8 +1148,8 @@ def merge_audio_video(video_path, audio_path):
             audio_path.unlink()
             return True
 
-        # Plik tymczasowy dla video z audio
-        temp_output = video_path.parent / f"temp_merged_{video_path.name}"
+        # Plik tymczasowy dla video z audio (lokalny dysk, nie karta SD)
+        temp_output = THUMBNAIL_DIR / f"temp_merged_{video_path.name}"
 
         # Użyj ffmpeg do połączenia
         cmd = [
@@ -1462,7 +1564,8 @@ def add_date_overlay_to_video(video_path):
         font_config = FONT_DEFINITIONS.get(font_family, FONT_DEFINITIONS["HomeVideo"])
         font_path_ffmpeg = font_config["path"]
 
-        temp_file = video_path.parent / f"temp_{video_path.name}"
+        # Plik tymczasowy (lokalny dysk, nie karta SD)
+        temp_file = THUMBNAIL_DIR / f"temp_{video_path.name}"
 
         # Filtr drawtext
         drawtext_filter = (
@@ -3812,6 +3915,50 @@ def draw_recording_indicator():
         draw_text_with_outline("STBY", menu_font, GREEN, BLACK, stby_x, rec_y)
 
 
+def draw_error_message():
+    """Wyświetl komunikat błędu na środku ekranu"""
+    global error_message, error_message_time
+
+    if error_message is None:
+        return
+
+    # Sprawdź czy komunikat nie wygasł
+    current_time = time.time()
+    if current_time - error_message_time > ERROR_DISPLAY_DURATION:
+        error_message = None
+        return
+
+    # Wymiary komunikatu
+    padding = 30
+
+    # Renderuj tekst aby poznać wymiary
+    text_surface = font_large.render(error_message, True, WHITE)
+    text_width = text_surface.get_width()
+    text_height = text_surface.get_height()
+
+    # Wymiary boksu
+    box_width = text_width + padding * 2
+    box_height = text_height + padding * 2
+
+    # Pozycja na środku ekranu
+    box_x = (SCREEN_WIDTH - box_width) // 2
+    box_y = (SCREEN_HEIGHT - box_height) // 2
+
+    # Rysuj półprzezroczyste tło (ciemne)
+    overlay = pygame.Surface((box_width, box_height))
+    overlay.set_alpha(220)
+    overlay.fill((40, 40, 40))
+    screen.blit(overlay, (box_x, box_y))
+
+    # Rysuj czerwoną ramkę
+    pygame.draw.rect(screen, RED, (box_x, box_y, box_width, box_height), 4, border_radius=10)
+
+    # Rysuj tekst na środku
+    text_x = box_x + box_width // 2 - text_width // 2
+    text_y = box_y + box_height // 2 - text_height // 2
+    screen.blit(text_surface, (text_x, text_y))
+
+
 def draw_sd_indicator():
     """Rysuj spixelizowaną ikonę karty SD poniżej REC/STBY"""
     # Ukryj ikonę SD podczas nagrywania
@@ -3928,6 +4075,14 @@ def generate_thumbnail(video_path, max_retries=3):
 def refresh_videos():
     """Odśwież listę filmów"""
     global videos, selected_index, thumbnails, selected_videos, multi_select_mode
+
+    if not VIDEO_DIR:
+        videos = []
+        thumbnails = {}
+        selected_videos.clear()
+        multi_select_mode = False
+        print("[WARN] VIDEO_DIR niedostępny")
+        return
 
     old_selected = videos[selected_index] if videos and 0 <= selected_index < len(videos) else None
 
@@ -4453,6 +4608,10 @@ def start_recording():
     global recording, current_file, encoder, recording_start_time, current_recording_fps
 
     if not recording:
+        if not VIDEO_DIR:
+            print("[ERROR] VIDEO_DIR niedostępny - nie można nagrywać")
+            return
+
         current_recording_fps = get_current_fps()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -4654,8 +4813,8 @@ def start_video_playback(video_path):
 
     # Ekstraktuj audio do tymczasowego pliku WAV dla pygame.mixer
     try:
-        # Ścieżka do tymczasowego pliku audio
-        temp_audio_path = VIDEO_DIR / f"temp_playback_audio_{video_path.stem}.wav"
+        # Ścieżka do tymczasowego pliku audio (lokalny dysk, nie karta SD)
+        temp_audio_path = THUMBNAIL_DIR / f"temp_playback_audio_{video_path.stem}.wav"
 
         # Usuń stary plik tymczasowy jeśli istnieje
         if temp_audio_path.exists():
@@ -4712,7 +4871,7 @@ def stop_video_playback():
     # Usuń tymczasowy plik audio jeśli istnieje
     if video_path_playing:
         try:
-            temp_audio_path = VIDEO_DIR / f"temp_playback_audio_{video_path_playing.stem}.wav"
+            temp_audio_path = THUMBNAIL_DIR / f"temp_playback_audio_{video_path_playing.stem}.wav"
             if temp_audio_path.exists():
                 temp_audio_path.unlink()
                 print(f"[AUDIO] Usunięto tymczasowy plik: {temp_audio_path.name}")
@@ -4779,8 +4938,8 @@ def seek_video(seconds):
             # Oblicz pozycję w sekundach
             target_time_seconds = target_frame / video_fps if video_fps > 0 else 0
 
-            # Ścieżka do tymczasowego pliku audio
-            temp_audio_path = VIDEO_DIR / f"temp_playback_audio_{video_path_playing.stem}.wav"
+            # Ścieżka do tymczasowego pliku audio (lokalny dysk, nie karta SD)
+            temp_audio_path = THUMBNAIL_DIR / f"temp_playback_audio_{video_path_playing.stem}.wav"
 
             if temp_audio_path.exists():
                 # Zatrzymaj obecne audio
@@ -4865,6 +5024,7 @@ def draw_main_screen(frame):
     draw_recording_indicator()
     # draw_sd_indicator()
     draw_recording_time_remaining()
+    draw_error_message()  # Komunikaty błędów na wierzchu
 
 
 def draw_videos_screen(hide_buttons=False):
@@ -5961,10 +6121,22 @@ def draw_confirm_dialog():
 # OBSŁUGA PRZYCISKÓW
 # ============================================================================
 
+def show_error_message(message):
+    """Wyświetl komunikat błędu na ekranie"""
+    global error_message, error_message_time
+    error_message = message
+    error_message_time = time.time()
+    print(f"[ERROR] {message}")
+
+
 def handle_record():
     global current_state
     if current_state == STATE_MAIN:
         if not recording:
+            # Sprawdź czy karta SD jest dostępna
+            if not check_sd_card():
+                show_error_message("BRAK KARTY SD!")
+                return
             start_recording()
         else:
             stop_recording()
@@ -5973,6 +6145,10 @@ def handle_record():
 def handle_videos():
     global current_state, selected_videos, multi_select_mode, selected_index
     if current_state == STATE_MAIN and not recording:
+        # Sprawdź czy karta SD jest dostępna
+        if not check_sd_card():
+            show_error_message("BRAK KARTY SD!")
+            return
         refresh_videos()
         selected_index = 0  # NAPRAWIONE: Resetuj do pierwszego filmu
         current_state = STATE_VIDEOS
@@ -6562,6 +6738,21 @@ def cleanup(signum=None, frame=None):
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, cleanup)
 
+    # Wykryj i ustaw kartę SD
+    print("\n" + "="*70)
+    print("[SD CARD] WYKRYWANIE KARTY SD")
+    print("="*70)
+    VIDEO_DIR = find_sd_card()
+    if VIDEO_DIR:
+        print(f"[OK] Katalog wideo: {VIDEO_DIR}")
+    else:
+        print("[ERROR] Nie znaleziono karty SD! Aplikacja może nie działać poprawnie.")
+        # Fallback do katalogu domyślnego
+        VIDEO_DIR = Path("/home/pi/camera_project/videos")
+        VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+        print(f"[FALLBACK] Używam: {VIDEO_DIR}")
+    print("="*70 + "\n")
+
     init_pygame()
     init_camera()
 
@@ -6602,13 +6793,16 @@ if __name__ == '__main__':
     button_handlers['MENU'] = handle_menu
     button_handlers['PLUS'] = handle_zoom_in
     button_handlers['MINUS'] = handle_zoom_out
-    
+
+    # Synchronizuj miniaturki z filmami
+    sync_thumbnails_with_videos()
+
     print("\n" + "="*70)
     print("[SYSTEM] SYSTEM KAMERA - RASPBERRY PI 5")
     print("="*70)
     print("[MAIN] Kamera | [REC] Record | [VIDEOS] Videos | [CONFIG] Menu | [ZOOM] +/- Zoom")
     print("="*70 + "\n")
-    
+
     clock = pygame.time.Clock()
     
     last_continuous_seek = 0
@@ -6629,8 +6823,39 @@ if __name__ == '__main__':
             # Aktualizuj szacowany czas baterii (co 30 sekund)
             update_battery_estimate()
 
-            # Skanuj matrycę przycisków i wywołaj handlery
+            # Monitoruj dostępność karty SD (co 2 sekundy)
+            if current_time - last_sd_check_time >= SD_CHECK_INTERVAL:
+                old_video_dir = VIDEO_DIR
+                new_video_dir = find_sd_card()
+
+                # Wykryj zmianę stanu karty SD
+                if old_video_dir is None and new_video_dir is not None:
+                    # Karta została wsadzona
+                    VIDEO_DIR = new_video_dir
+                    print(f"[SD CARD] Karta SD wykryta: {VIDEO_DIR}")
+                elif old_video_dir is not None and new_video_dir is None:
+                    # Karta została wyjęta
+                    VIDEO_DIR = None
+                    print("[SD CARD] Karta SD wyjęta")
+                elif old_video_dir != new_video_dir and new_video_dir is not None:
+                    # Zmieniono kartę SD
+                    VIDEO_DIR = new_video_dir
+                    print(f"[SD CARD] Zmieniono kartę SD: {VIDEO_DIR}")
+
+                last_sd_check_time = current_time
+
+            # Skanuj matrycę przycisków i wywołuj handlery
             check_matrix_buttons()
+
+            # Sprawdź czy karta SD jest dostępna podczas przeglądania filmów
+            if current_state in [STATE_VIDEOS, STATE_PLAYING, STATE_CONFIRM]:
+                if not check_sd_card():
+                    print("[WARN] Karta SD niedostępna - powrót do podglądu")
+                    if current_state == STATE_PLAYING:
+                        stop_video_playback()
+                    current_state = STATE_MAIN
+                    selected_videos.clear()
+                    multi_select_mode = False
 
             if current_state == STATE_PLAYING:
                 if is_button_pressed('RIGHT'):
