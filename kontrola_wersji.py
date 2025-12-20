@@ -150,6 +150,7 @@ video_path_playing = None
 video_last_frame_time = 0
 video_last_surface = None
 video_audio_ready = False  # NOWY: Czy audio jest gotowe do odtwarzania
+playback_loading_start_time = 0  # Czas rozpoczęcia ładowania wideo
 
 # Video Manager
 videos = []
@@ -4768,13 +4769,14 @@ def start_video_playback(video_path):
     """Rozpocznij odtwarzanie - FPS z nazwy pliku"""
     global video_capture, video_current_frame, video_total_frames, video_fps
     global video_path_playing, video_paused, current_state, video_last_frame_time, video_last_surface
-    global video_audio_ready  # NOWY: Flaga gotowości audio
+    global video_audio_ready, playback_loading_start_time  # NOWY: Flaga gotowości audio
 
     print(f"\n[PLAY] ODTWARZANIE: {video_path.name}")
 
     # Resetuj flagę audio - ZAPAUZUJ video dopóki audio się nie załaduje
     video_audio_ready = False
     video_paused = True
+    playback_loading_start_time = time.time()
 
     video_capture = cv2.VideoCapture(str(video_path))
     if not video_capture.isOpened():
@@ -5931,32 +5933,34 @@ def draw_playing_screen():
 
     # NOWY: Wskaźnik ładowania audio - wyświetlaj gdy audio jeszcze się nie załadowało
     if not video_audio_ready:
-        # Półprzezroczyste tło
-        loading_overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        loading_overlay.fill((0, 0, 0, 180))
-        screen.blit(loading_overlay, (0, 0))
+        time_since_start = time.time() - playback_loading_start_time
+        if time_since_start > 3.0:
+            # Półprzezroczyste tło
+            loading_overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            loading_overlay.fill((0, 0, 0, 180))
+            screen.blit(loading_overlay, (0, 0))
 
-        # Tekst ładowania na środku ekranu
-        loading_text = "ŁADOWANIE..."
-        draw_text_with_outline(loading_text, font_large, YELLOW, BLACK, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 40, center=True)
+            # Tekst ładowania na środku ekranu
+            loading_text = "ŁADOWANIE..."
+            draw_text_with_outline(loading_text, font_large, YELLOW, BLACK, SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 40, center=True)
 
-        # Animowany pasek ładowania
-        bar_width = 600
-        bar_height = 20
-        bar_x = (SCREEN_WIDTH - bar_width) // 2
-        bar_y = SCREEN_HEIGHT // 2 + 20
+            # Animowany pasek ładowania
+            bar_width = 600
+            bar_height = 20
+            bar_x = (SCREEN_WIDTH - bar_width) // 2
+            bar_y = SCREEN_HEIGHT // 2 + 20
 
-        # Tło paska
-        pygame.draw.rect(screen, DARK_GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=10)
+            # Tło paska
+            pygame.draw.rect(screen, DARK_GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=10)
 
-        # Animowana wypełniona część (pulsująca)
-        pulse_speed = 2.0
-        pulse_phase = (time.time() * pulse_speed) % 1.0
-        fill_width = int(bar_width * pulse_phase)
-        pygame.draw.rect(screen, BLUE, (bar_x, bar_y, fill_width, bar_height), border_radius=10)
+            # Animowana wypełniona część (pulsująca)
+            pulse_speed = 2.0
+            pulse_phase = (time.time() * pulse_speed) % 1.0
+            fill_width = int(bar_width * pulse_phase)
+            pygame.draw.rect(screen, BLUE, (bar_x, bar_y, fill_width, bar_height), border_radius=10)
 
-        # Białe obramowanie
-        pygame.draw.rect(screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 3, border_radius=10)
+            # Białe obramowanie
+            pygame.draw.rect(screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 3, border_radius=10)
 
     # === PROGRESS BAR - na dole ekranu ===
     progress_margin = 50
