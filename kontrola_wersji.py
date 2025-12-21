@@ -3786,34 +3786,6 @@ def draw_battery_icon():
     draw_text_with_outline(percent_text, font_large, WHITE, BLACK, percent_x, text_y)
     draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x, text_y)
 
-    # === WSKAŹNIK KARTY SD POD BATERIĄ ===
-    # Sprawdź czy karta SD jest wsadzona
-    sd_inserted = check_sd_card()
-
-    # Rozmiary ramki SD
-    sd_box_width = 90
-    sd_box_height = 40
-    sd_box_margin_top = 10  # Odstęp od baterii
-    sd_box_x = battery_x
-    sd_box_y = battery_y + battery_height + sd_box_margin_top
-
-    # Białe tło ramki
-    pygame.draw.rect(screen, WHITE,
-                     (sd_box_x, sd_box_y, sd_box_width, sd_box_height),
-                     border_radius=5)
-
-    # Czarne obramowanie (3px)
-    pygame.draw.rect(screen, BLACK,
-                     (sd_box_x, sd_box_y, sd_box_width, sd_box_height),
-                     3, border_radius=5)
-
-    # Tekst w środku ramki - czarny na białym tle
-    sd_text = "SD" if sd_inserted else "NO SD"
-    # Wyśrodkuj tekst w ramce
-    text_center_x = sd_box_x + sd_box_width // 2
-    text_center_y = sd_box_y + sd_box_height // 2 - 10
-    draw_text(sd_text, font_large, BLACK, text_center_x, text_center_y, center=True)
-
 
 def draw_format_fps():
     """Rysuj informacje o formacie i FPS w prawym górnym rogu, pod REC/STBY"""
