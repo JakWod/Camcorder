@@ -5997,9 +5997,9 @@ def draw_playing_screen():
             # Białe obramowanie
             pygame.draw.rect(screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 3, border_radius=10)
 
-    # === PROGRESS BAR - na dole ekranu (ukryj po bezczynności, ale zawsze widoczny podczas pauzy) ===
+    # === PROGRESS BAR - na dole ekranu (ukryj po bezczynności) ===
     time_since_interaction = time.time() - last_ui_interaction_time
-    show_progress_bar = video_paused or (time_since_interaction < UI_HIDE_DELAY)
+    show_progress_bar = (time_since_interaction < UI_HIDE_DELAY)
 
     if show_progress_bar:
         progress_margin = 50
