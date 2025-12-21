@@ -191,6 +191,7 @@ steadyhand_icon = None  # Obrazek ikony steadyhand
 sd_icon = None  # Obrazek ikony karty SD
 brightness_icon = None  # Obrazek ikony brightness
 film_icon = None  # Obrazek ikony filmu
+pause_icon = None  # Obrazek ikony pauzy
 
 # Menu System
 menu_tiles = []
@@ -3785,6 +3786,34 @@ def draw_battery_icon():
     draw_text_with_outline(percent_text, font_large, WHITE, BLACK, percent_x, text_y)
     draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x, text_y)
 
+    # === WSKAŹNIK KARTY SD POD BATERIĄ ===
+    # Sprawdź czy karta SD jest wsadzona
+    sd_inserted = check_sd_card()
+
+    # Rozmiary ramki SD
+    sd_box_width = 90
+    sd_box_height = 40
+    sd_box_margin_top = 10  # Odstęp od baterii
+    sd_box_x = battery_x
+    sd_box_y = battery_y + battery_height + sd_box_margin_top
+
+    # Białe tło ramki
+    pygame.draw.rect(screen, WHITE,
+                     (sd_box_x, sd_box_y, sd_box_width, sd_box_height),
+                     border_radius=5)
+
+    # Czarne obramowanie (3px)
+    pygame.draw.rect(screen, BLACK,
+                     (sd_box_x, sd_box_y, sd_box_width, sd_box_height),
+                     3, border_radius=5)
+
+    # Tekst w środku ramki - czarny na białym tle
+    sd_text = "SD" if sd_inserted else "NO SD"
+    # Wyśrodkuj tekst w ramce
+    text_center_x = sd_box_x + sd_box_width // 2
+    text_center_y = sd_box_y + sd_box_height // 2 - 10
+    draw_text(sd_text, font_large, BLACK, text_center_x, text_center_y, center=True)
+
 
 def draw_format_fps():
     """Rysuj informacje o formacie i FPS w prawym górnym rogu, pod REC/STBY"""
@@ -4449,7 +4478,7 @@ def pixelize_image(image, pixel_size=4):
 
 def load_images():
     """Załaduj obrazki interfejsu"""
-    global playback_icon, steadyhand_icon, sd_icon, brightness_icon, film_icon
+    global playback_icon, steadyhand_icon, sd_icon, brightness_icon, film_icon, pause_icon
 
     try:
         # Załaduj ikonę playback
@@ -4496,12 +4525,22 @@ def load_images():
         else:
             print(f"[WARN] Nie znaleziono pliku: {film_path}")
             film_icon = None
+
+        # Załaduj ikonę pauzy
+        pause_path = Path(__file__).parent / "pause.png"
+        if pause_path.exists():
+            pause_icon = pygame.image.load(str(pause_path))
+            print("[OK] Ikona pause załadowana")
+        else:
+            print(f"[WARN] Nie znaleziono pliku: {pause_path}")
+            pause_icon = None
     except Exception as e:
         print(f"[ERROR] Błąd wczytywania obrazków: {e}")
         playback_icon = None
         steadyhand_icon = None
         sd_icon = None
         brightness_icon = None
+        pause_icon = None
 
 
 # ============================================================================
@@ -6016,40 +6055,60 @@ def draw_playing_screen():
 
     # === SYMBOL PAUZY - na środku ekranu (tylko gdy zapauzowane I audio jest gotowe) ===
     if video_paused and video_audio_ready:
-        pause_icon_size = 120
-        pause_bar_width = 35
-        pause_bar_height = pause_icon_size
-        pause_spacing = 25
+        if pause_icon is not None:
+            # Wyświetl ikonę pause.png
+            # Rozmiar ikony - 200px (większy niż poprzednie paski)
+            icon_size = 400
 
-        # Pozycja na środku ekranu
-        center_x = SCREEN_WIDTH // 2
-        center_y = SCREEN_HEIGHT // 2
+            # Pozycja na środku ekranu
+            center_x = SCREEN_WIDTH // 2
+            center_y = SCREEN_HEIGHT // 2
 
-        # Lewy pasek
-        left_bar_x = center_x - pause_spacing - pause_bar_width
-        left_bar_y = center_y - pause_bar_height // 2
+            # Przeskaluj ikonę do odpowiedniego rozmiaru
+            scaled_pause = pygame.transform.scale(pause_icon, (icon_size, icon_size))
 
-        # Prawy pasek
-        right_bar_x = center_x + pause_spacing
-        right_bar_y = center_y - pause_bar_height // 2
+            # Pozycja do wyrysowania (wyśrodkowana)
+            icon_x = center_x - icon_size // 2
+            icon_y = center_y - icon_size // 2
 
-        # Rysuj z półprzezroczystym tłem
-        pause_bg = pygame.Surface((pause_icon_size * 2, pause_icon_size * 2), pygame.SRCALPHA)
-        pause_bg.fill((0, 0, 0, 150))
-        screen.blit(pause_bg, (center_x - pause_icon_size, center_y - pause_icon_size))
+            # Rysuj ikonę
+            screen.blit(scaled_pause, (icon_x, icon_y))
+        else:
+            # Fallback - rysuj białe paski pauzy jeśli ikona się nie załadowała
+            pause_icon_size = 120
+            pause_bar_width = 35
+            pause_bar_height = pause_icon_size
+            pause_spacing = 25
 
-        # NAPRAWIONE: Czarny outline (większy prostokąt z tyłu)
-        outline_width = 4
-        pygame.draw.rect(screen, BLACK,
-                        (left_bar_x - outline_width, left_bar_y - outline_width,
-                         pause_bar_width + outline_width * 2, pause_bar_height + outline_width * 2))
-        pygame.draw.rect(screen, BLACK,
-                        (right_bar_x - outline_width, right_bar_y - outline_width,
-                         pause_bar_width + outline_width * 2, pause_bar_height + outline_width * 2))
+            # Pozycja na środku ekranu
+            center_x = SCREEN_WIDTH // 2
+            center_y = SCREEN_HEIGHT // 2
 
-        # Rysuj białe paski pauzy (bez zaokrągleń - usunięto border_radius)
-        pygame.draw.rect(screen, WHITE, (left_bar_x, left_bar_y, pause_bar_width, pause_bar_height))
-        pygame.draw.rect(screen, WHITE, (right_bar_x, right_bar_y, pause_bar_width, pause_bar_height))
+            # Lewy pasek
+            left_bar_x = center_x - pause_spacing - pause_bar_width
+            left_bar_y = center_y - pause_bar_height // 2
+
+            # Prawy pasek
+            right_bar_x = center_x + pause_spacing
+            right_bar_y = center_y - pause_bar_height // 2
+
+            # Rysuj z półprzezroczystym tłem
+            pause_bg = pygame.Surface((pause_icon_size * 2, pause_icon_size * 2), pygame.SRCALPHA)
+            pause_bg.fill((0, 0, 0, 150))
+            screen.blit(pause_bg, (center_x - pause_icon_size, center_y - pause_icon_size))
+
+            # Czarny outline (większy prostokąt z tyłu)
+            outline_width = 4
+            pygame.draw.rect(screen, BLACK,
+                            (left_bar_x - outline_width, left_bar_y - outline_width,
+                             pause_bar_width + outline_width * 2, pause_bar_height + outline_width * 2))
+            pygame.draw.rect(screen, BLACK,
+                            (right_bar_x - outline_width, right_bar_y - outline_width,
+                             pause_bar_width + outline_width * 2, pause_bar_height + outline_width * 2))
+
+            # Rysuj białe paski pauzy (bez zaokrągleń - usunięto border_radius)
+            pygame.draw.rect(screen, WHITE, (left_bar_x, left_bar_y, pause_bar_width, pause_bar_height))
+            pygame.draw.rect(screen, WHITE, (right_bar_x, right_bar_y, pause_bar_width, pause_bar_height))
 
     # === WSKAŹNIK GŁOŚNOŚCI - pojawia się na 2 sekundy po zmianie (kolumny bez ramki) ===
     time_since_volume_change = time.time() - last_volume_change_time
