@@ -571,52 +571,71 @@ def draw_recording_time_remaining():
 
 
 def draw_zoom_indicator():
-    """Rysuj wskaźnik zoomu Z99, steadyhand, AF AUTO, balans bieli, ISO i Brightness (zawsze widoczne, wyrównane do prawej)"""
+    """Rysuj wskaźnik zoomu Z99, steadyhand, AF AUTO, balans bieli, ISO i Brightness (zawsze widoczne, wyrównane do prawej, OD DOŁU)"""
     # Ukryj wskaźniki podczas nagrywania
     if recording:
         return
 
     zoom_right_edge = SCREEN_WIDTH - 20  # Margines od prawej krawędzi
-    zoom_y = 220  # Pod formatem i FPS
+    bottom_margin = 100  # Margines od dolnej krawędzi
 
-    # Pobierz poziom zoomu (0.0 - 1.0) i przelicz na procenty (0-99)
-    zoom_level = camera_settings.get("zoom", 0.0)
-    zoom_percent = int(zoom_level * 99)
+    # ZMIANA: Rysowanie OD DOŁU DO GÓRY - zaczynamy od brightness (najniżej)
 
-    # Tekst wskaźnika zoomu w formacie Z99
-    zoom_text = f"Z{zoom_percent:02d}"
+    # Brightness - najniżej (na dole)
+    brightness_y = SCREEN_HEIGHT - bottom_margin
+
+    # Pobierz wartość brightness z ustawień
+    brightness_value = camera_settings.get("brightness", 0.0)
+    brightness_value_text = f"{brightness_value:+.1f}"
+
+    # Wyrenderuj tekst wartości
+    brightness_value_surface = font_large.render(brightness_value_text, True, WHITE)
+    brightness_value_width = brightness_value_surface.get_width()
+
+    if brightness_icon is not None:
+        # Skaluj ikonę - rozmiar jak tekst
+        icon_height = 50  # Wysokość ikony dostosowana do tekstu
+        icon_width = int(icon_height * (brightness_icon.get_width() / brightness_icon.get_height()))
+        scaled_brightness = pygame.transform.scale(brightness_icon, (icon_width + 10, icon_height))
+
+        # Oblicz całkowitą szerokość (ikona + odstęp + wartość)
+        total_width = icon_width + 5 + brightness_value_width
+
+        # Pozycja początkowa - wyrównanie do prawej
+        start_x = zoom_right_edge - total_width
+
+        # Rysuj ikonę
+        screen.blit(scaled_brightness, (start_x - 20, brightness_y - 10))
+
+        # Rysuj wartość obok ikony
+        draw_text_with_outline(brightness_value_text, font_large, WHITE, BLACK, start_x + icon_width + 5, brightness_y)
+    else:
+        # Fallback - jeśli ikona się nie załadowała, użyj tekstu
+        brightness_text = f"B {brightness_value:+.1f}"
+        brightness_text_surface = font_large.render(brightness_text, True, WHITE)
+        brightness_text_width = brightness_text_surface.get_width()
+        brightness_x = zoom_right_edge - brightness_text_width
+        draw_text_with_outline(brightness_text, font_large, WHITE, BLACK, brightness_x, brightness_y)
+
+    # ISO powyżej brightness - DODATKOWE 5px przerwy
+    iso_y = brightness_y - 55
+
+    # Pobierz tryb ISO z ustawień
+    iso_mode = camera_settings.get("iso_mode", "auto")
+    if iso_mode == "auto":
+        iso_text = "ISO AUTO"
+    else:
+        iso_text = f"ISO {iso_mode}"
 
     # Oblicz pozycję x aby wyrównać do prawej
-    zoom_text_surface = font_large.render(zoom_text, True, WHITE)
-    zoom_text_width = zoom_text_surface.get_width()
-    zoom_x = zoom_right_edge - zoom_text_width
+    iso_text_surface = font_large.render(iso_text, True, WHITE)
+    iso_text_width = iso_text_surface.get_width()
+    iso_x = zoom_right_edge - iso_text_width
 
-    # Rysuj wskaźnik zoomu z białym tekstem i czarnym obramowaniem
-    draw_text_with_outline(zoom_text, font_large, WHITE, BLACK, zoom_x, zoom_y)
+    draw_text_with_outline(iso_text, font_large, WHITE, BLACK, iso_x, iso_y)
 
-    # Ikona steadyhand poniżej zoom
-    steadyhand_y = zoom_y + 25
-    if steadyhand_icon is not None:
-        # Skaluj ikonę - rozmiar jak wcześniej
-        icon_height = 90  # Wysokość ikony
-        icon_width = int(icon_height + 10)
-        scaled_steadyhand = pygame.transform.scale(steadyhand_icon, (icon_width, icon_height))
-        scaled_steadyhand = pygame.transform.flip(scaled_steadyhand, True, False)
-
-        # Wyrównaj do prawej krawędzi
-        steadyhand_x = zoom_right_edge - icon_width
-        screen.blit(scaled_steadyhand, (steadyhand_x, steadyhand_y))
-
-    # AF AUTO (autofocus) poniżej steadyhand
-    af_y = steadyhand_y + 85
-    af_auto_text = "AF AUTO"
-    af_auto_text_surface = font_large.render(af_auto_text, True, WHITE)
-    af_auto_text_width = af_auto_text_surface.get_width()
-    af_auto_x = zoom_right_edge - af_auto_text_width
-    draw_text_with_outline(af_auto_text, font_large, WHITE, BLACK, af_auto_x, af_y)
-
-    # Przerwa po AF, następnie balans bieli
-    wb_y = af_y + 75
+    # White balance powyżej ISO - DODATKOWE 5px przerwy
+    wb_y = iso_y - 55
 
     # Pobierz tryb balansu bieli z ustawień
     awb_mode = camera_settings.get("awb_mode", "auto")
@@ -643,58 +662,44 @@ def draw_zoom_indicator():
 
     draw_text_with_outline(wb_text, font_large, WHITE, BLACK, wb_x, wb_y)
 
-    # ISO poniżej white balance - DODATKOWE 5px przerwy
-    iso_y = wb_y + 55
+    # AF AUTO powyżej white balance
+    af_y = wb_y - 75
+    af_auto_text = "AF AUTO"
+    af_auto_text_surface = font_large.render(af_auto_text, True, WHITE)
+    af_auto_text_width = af_auto_text_surface.get_width()
+    af_auto_x = zoom_right_edge - af_auto_text_width
+    draw_text_with_outline(af_auto_text, font_large, WHITE, BLACK, af_auto_x, af_y)
 
-    # Pobierz tryb ISO z ustawień
-    iso_mode = camera_settings.get("iso_mode", "auto")
-    if iso_mode == "auto":
-        iso_text = "ISO AUTO"
-    else:
-        iso_text = f"ISO {iso_mode}"
+    # Ikona steadyhand powyżej AF AUTO
+    steadyhand_y = af_y - 85
+    if steadyhand_icon is not None:
+        # Skaluj ikonę - rozmiar jak wcześniej
+        icon_height = 90  # Wysokość ikony
+        icon_width = int(icon_height + 10)
+        scaled_steadyhand = pygame.transform.scale(steadyhand_icon, (icon_width, icon_height))
+        scaled_steadyhand = pygame.transform.flip(scaled_steadyhand, True, False)
+
+        # Wyrównaj do prawej krawędzi
+        steadyhand_x = zoom_right_edge - icon_width
+        screen.blit(scaled_steadyhand, (steadyhand_x, steadyhand_y))
+
+    # Zoom powyżej steadyhand - najwyżej
+    zoom_y = steadyhand_y - 25
+
+    # Pobierz poziom zoomu (0.0 - 1.0) i przelicz na procenty (0-99)
+    zoom_level = camera_settings.get("zoom", 0.0)
+    zoom_percent = int(zoom_level * 99)
+
+    # Tekst wskaźnika zoomu w formacie Z99
+    zoom_text = f"Z{zoom_percent:02d}"
 
     # Oblicz pozycję x aby wyrównać do prawej
-    iso_text_surface = font_large.render(iso_text, True, WHITE)
-    iso_text_width = iso_text_surface.get_width()
-    iso_x = zoom_right_edge - iso_text_width
+    zoom_text_surface = font_large.render(zoom_text, True, WHITE)
+    zoom_text_width = zoom_text_surface.get_width()
+    zoom_x = zoom_right_edge - zoom_text_width
 
-    draw_text_with_outline(iso_text, font_large, WHITE, BLACK, iso_x, iso_y)
-
-    # Brightness poniżej ISO - DODATKOWE 5px przerwy
-    brightness_y = iso_y + 55
-
-    # Pobierz wartość brightness z ustawień
-    brightness_value = camera_settings.get("brightness", 0.0)
-    brightness_value_text = f"{brightness_value:+.1f}"
-
-    # Wyrenderuj tekst wartości
-    brightness_value_surface = font_large.render(brightness_value_text, True, WHITE)
-    brightness_value_width = brightness_value_surface.get_width()
-
-    if brightness_icon is not None:
-        # Skaluj ikonę - rozmiar jak tekst
-        icon_height = 50  # Wysokość ikony dostosowana do tekstu
-        icon_width = int(icon_height * (brightness_icon.get_width() / brightness_icon.get_height()))
-        scaled_brightness = pygame.transform.scale(brightness_icon, (icon_width + 10, icon_height))
-
-        # Oblicz całkowitą szerokość (ikona + odstęp + wartość)
-        total_width = icon_width + 5 + brightness_value_width
-
-        # Pozycja początkowa - wyrównanie do prawej
-        start_x = zoom_right_edge - total_width 
-
-        # Rysuj ikonę
-        screen.blit(scaled_brightness, (start_x - 20, brightness_y - 10))
-
-        # Rysuj wartość obok ikony
-        draw_text_with_outline(brightness_value_text, font_large, WHITE, BLACK, start_x + icon_width + 5, brightness_y)
-    else:
-        # Fallback - jeśli ikona się nie załadowała, użyj tekstu
-        brightness_text = f"B {brightness_value:+.1f}"
-        brightness_text_surface = font_large.render(brightness_text, True, WHITE)
-        brightness_text_width = brightness_text_surface.get_width()
-        brightness_x = zoom_right_edge - brightness_text_width
-        draw_text_with_outline(brightness_text, font_large, WHITE, BLACK, brightness_x, brightness_y)
+    # Rysuj wskaźnik zoomu z białym tekstem i czarnym obramowaniem
+    draw_text_with_outline(zoom_text, font_large, WHITE, BLACK, zoom_x, zoom_y)
 
 
 # ============================================================================
@@ -1209,7 +1214,7 @@ def merge_audio_video(video_path, audio_path):
 
 def draw_audio_level_indicator():
     """Rysuj wskaźnik poziomu głośności - styl VU meter z 48K, CH1/CH2 i segmentami"""
-    if not audio or current_state != STATE_MAIN:
+    if not audio or current_state != STATE_MAIN or recording:
         return
 
     # Poziomy audio z globalnych zmiennych
@@ -3613,17 +3618,17 @@ def update_battery_estimate():
 
 
 def draw_battery_icon():
-    """Rysuj ikonę baterii z 4 segmentami w prawym dolnym rogu (biała/zielona z piorunkiem gdy ładuje)"""
+    """Rysuj ikonę baterii z 4 segmentami w lewym górnym rogu (biała/zielona z piorunkiem gdy ładuje)"""
     # Użyj stanu z histerezy zamiast sprawdzać prąd bezpośrednio
     is_charging = battery_is_charging
 
-    # Pozycja i rozmiar baterii - prawy dolny róg - ZWIĘKSZONE ROZMIARY
+    # Pozycja i rozmiar baterii - lewy górny róg - ZWIĘKSZONE ROZMIARY
     battery_width = 70  # Zwiększone z 60
     battery_height = 33  # Zwiększone z 28
-    right_margin = 20
-    bottom_margin = 80  # Nad dolną krawędzią, zostawiamy miejsce na czas
-    battery_x = SCREEN_WIDTH - right_margin - battery_width - 5  # Przesunięte 5px w lewo
-    battery_y = SCREEN_HEIGHT - bottom_margin - battery_height - 10
+    left_margin = 20
+    top_margin = 20
+    battery_x = left_margin
+    battery_y = top_margin
 
     # Wybierz kolor w zależności od stanu ładowania (z histerezy)
     battery_color = GREEN if is_charging else WHITE
@@ -3739,7 +3744,7 @@ def draw_battery_icon():
         # Żółty wypełniony piorun
         pygame.draw.polygon(screen, YELLOW, lightning_points)
 
-    # Szacowany czas pracy baterii poniżej ikony - FORMAT hh:mm lub --:-- gdy ładuje
+    # Szacowany czas pracy baterii NA PRAWO od ikony baterii - FORMAT hh:mm lub --:-- gdy ładuje
     if is_charging:
         # Podczas ładowania pokaż --:--
         time_text = "--:--"
@@ -3760,26 +3765,25 @@ def draw_battery_icon():
 
     percent_text = f"{precise_percent:.1f}%"
 
-    # Pozycja tekstów poniżej baterii
-    time_y = battery_y + battery_height + 20
+    # NAPRAWIONE: Pozycja tekstów NA PRAWO od baterii w JEDNEJ LINII (poziomo)
+    # Wyrównane do prawej krawędzi baterii
+    battery_right_edge = battery_x + battery_width
+    text_start_x = battery_right_edge + 20  # 20px odstępu od baterii
+    text_y = battery_y + battery_height // 2 - 10  # Wyśrodkowane pionowo z baterią
 
-    # Procent po lewej, czas po prawej
-    # Oblicz szerokości
+    # Procent po lewej
+    percent_x = text_start_x
+
+    # Oblicz szerokość tekstu procentu
     percent_text_surface = font_large.render(percent_text, True, WHITE)
     percent_text_width = percent_text_surface.get_width()
-    time_text_surface = font_large.render(time_text, True, WHITE)
-    time_text_width = time_text_surface.get_width()
 
-    # Pozycja czasu - wyrównane do prawej
-    time_x = SCREEN_WIDTH - right_margin - time_text_width
+    # Czas po prawej stronie procentu (w jednej linii, odstęp 20px)
+    time_x = percent_x + percent_text_width + 20
 
-    # Pozycja procentu - na lewo od czasu z odstępem
-    spacing = 20
-    percent_x = time_x - spacing - percent_text_width
-
-    # Rysuj procent i czas
-    draw_text_with_outline(percent_text, font_large, WHITE, BLACK, percent_x, time_y)
-    draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x, time_y)
+    # Rysuj procent i czas w jednej linii
+    draw_text_with_outline(percent_text, font_large, WHITE, BLACK, percent_x, text_y)
+    draw_text_with_outline(time_text, font_large, WHITE, BLACK, time_x, text_y)
 
 
 def draw_format_fps():
@@ -4269,7 +4273,7 @@ def get_display_date():
 
 
 def draw_date_overlay():
-    """Rysuj overlay daty na podglądzie - ZAWSZE po prawej od przycisku P-MENU"""
+    """Rysuj overlay daty na podglądzie - pozycja zależy od stanu nagrywania"""
     if not camera_settings.get("show_date", False):
         return
 
@@ -4292,15 +4296,21 @@ def draw_date_overlay():
     # NA PODGLĄDZIE ZAWSZE UŻYWAMY EXTRA_LARGE (niezależnie od ustawienia)
     date_font = font_large
 
-    # POZYCJA: Po prawej od przycisku P-MENU w lewym dolnym rogu
-    # Przycisk P-MENU: x=20, y=SCREEN_HEIGHT-75, width=220, height=55
-    pmenu_x = 20
-    pmenu_width = 220
-    pmenu_right_edge = pmenu_x + pmenu_width
+    # POZYCJA zależy od stanu nagrywania
+    if recording:
+        # PODCZAS NAGRYWANIA: Lewy dolny róg (tam gdzie był wcześniej przycisk P-MENU)
+        x = 20
+        y = SCREEN_HEIGHT - 65
+    else:
+        # BEZ NAGRYWANIA: Po prawej od przycisku P-MENU w lewym dolnym rogu
+        # Przycisk P-MENU: x=20, y=SCREEN_HEIGHT-75, width=220, height=55
+        pmenu_x = 20
+        pmenu_width = 220
+        pmenu_right_edge = pmenu_x + pmenu_width
 
-    spacing = 60  # Odstęp od przycisku P-MENU
-    x = pmenu_right_edge + spacing
-    y = SCREEN_HEIGHT - 65  # Ta sama wysokość co przycisk P-MENU (środek przycisku)
+        spacing = 60  # Odstęp od przycisku P-MENU
+        x = pmenu_right_edge + spacing
+        y = SCREEN_HEIGHT - 65  # Ta sama wysokość co przycisk P-MENU (środek przycisku)
 
     draw_text_with_outline(date_text, date_font, date_color, BLACK, x, y)
 
