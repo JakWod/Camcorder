@@ -1439,11 +1439,17 @@ def apply_camera_settings():
         # ISO (Analogue Gain) setting
         if "iso_mode" in camera_settings:
             iso_mode = camera_settings["iso_mode"]
-            if iso_mode != "auto" and iso_mode in ISO_TO_GAIN:
+            if iso_mode == "auto":
+                # Tryb auto - włącz AEC
+                controls["AeEnable"] = True
+                print(f"[ISO] Tryb AUTO - AEC włączony")
+            elif iso_mode in ISO_TO_GAIN:
                 gain_value = ISO_TO_GAIN[iso_mode]
                 if gain_value is not None:
+                    # Wyłącz AEC i ustaw stały gain
+                    controls["AeEnable"] = False
                     controls["AnalogueGain"] = gain_value
-                    print(f"[ISO] Ustawiono ISO {iso_mode} (gain: {gain_value})")
+                    print(f"[ISO] Ustawiono ISO {iso_mode} (gain: {gain_value}) - AEC wyłączony")
 
         if "zoom" in camera_settings:
             apply_zoom(camera_settings["zoom"])
