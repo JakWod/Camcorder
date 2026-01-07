@@ -47,6 +47,7 @@ ROW_PINS = [17, 22, 23, 27]  # R0, R1, R2, R3
 # GPIO Pins - Filtr IR CUT (mostek H)
 IR_CUT_A = 24  # Pełen dzień (IR filtr ON)
 IR_CUT_B = 25  # Noc (IR filtr OFF)
+IR_LED = 12    # Latarka IR (GPIO 12 = fizyczny pin 32)
 
 # Mapowanie przycisków w matrycy [row][col]
 # Układ:
@@ -256,6 +257,8 @@ camera_settings = {
     "font_family": "HomeVideo",
     "audio_recording": True,  # NOWY: Włącz/wyłącz nagrywanie dźwięku
     "show_center_frame": True,  # NOWY: Pokaż ramkę środkową
+    "night_vision_mode": False,  # NOWY: Tryb Night Vision (automatyczny dla IR)
+    "ir_filter_day_mode": True,  # NOWY: Stan filtra IR (True = dzień, False = noc)
 }
 
 # Opcje
@@ -1436,20 +1439,49 @@ def apply_camera_settings():
                     controls["ColourGains"] = gains
                     print(f"[AWB] Ustawiono tryb: {mode} (gains: {gains})")
 
-        # ISO (Analogue Gain) setting
-        if "iso_mode" in camera_settings:
-            iso_mode = camera_settings["iso_mode"]
-            if iso_mode == "auto":
-                # Tryb auto - włącz AEC
-                controls["AeEnable"] = True
-                print(f"[ISO] Tryb AUTO - AEC włączony")
-            elif iso_mode in ISO_TO_GAIN:
-                gain_value = ISO_TO_GAIN[iso_mode]
-                if gain_value is not None:
-                    # Wyłącz AEC i ustaw stały gain
-                    controls["AeEnable"] = False
-                    controls["AnalogueGain"] = gain_value
-                    print(f"[ISO] Ustawiono ISO {iso_mode} (gain: {gain_value}) - AEC wyłączony")
+        # Night Vision Mode - nadpisuje inne ustawienia ekspozycji
+        if camera_settings.get("night_vision_mode", False):
+            print("[NIGHT VISION] Tryb Night Vision aktywny")
+
+            # Wyłącz automatyczną ekspozycję (AEC) - KLUCZOWE dla stabilności obrazu IR
+            controls["AeEnable"] = False
+
+            # Ustaw stały czas ekspozycji w mikrosekundach
+            # Dla 30fps: max ~33ms (33000μs), używamy 30ms dla bezpieczeństwa
+            # Dla 50fps: max ~20ms (20000μs), używamy 18ms dla bezpieczeństwa
+            resolution = camera_settings.get("video_resolution", "1080p30")
+            fps = RESOLUTION_MAP.get(resolution, {"fps": 30})["fps"]
+
+            if fps >= 50:
+                exposure_time = 18000  # 18ms dla 50fps
+            else:
+                exposure_time = 30000  # 30ms dla 30fps
+
+            controls["ExposureTime"] = exposure_time
+
+            # Zwiększ czułość (gain) dla lepszej widoczności w IR
+            # Wartości gain: 1.0 - 16.0 (wyższe = jaśniejszy obraz, ale więcej szumu)
+            controls["AnalogueGain"] = 8.0  # Średnia wartość dla IR
+
+            # Wyłącz redukcję szumów - może powodować migotanie
+            controls["NoiseReductionMode"] = 0  # 0 = Off
+
+            print(f"[NIGHT VISION] ExposureTime={exposure_time}μs, Gain=8.0, FPS={fps}")
+        else:
+            # Normalny tryb dzienny - ISO (Analogue Gain) setting
+            if "iso_mode" in camera_settings:
+                iso_mode = camera_settings["iso_mode"]
+                if iso_mode == "auto":
+                    # Tryb auto - włącz AEC
+                    controls["AeEnable"] = True
+                    print(f"[ISO] Tryb AUTO - AEC włączony")
+                elif iso_mode in ISO_TO_GAIN:
+                    gain_value = ISO_TO_GAIN[iso_mode]
+                    if gain_value is not None:
+                        # Wyłącz AEC i ustaw stały gain
+                        controls["AeEnable"] = False
+                        controls["AnalogueGain"] = gain_value
+                        print(f"[ISO] Ustawiono ISO {iso_mode} (gain: {gain_value}) - AEC wyłączony")
 
         if "zoom" in camera_settings:
             apply_zoom(camera_settings["zoom"])
@@ -1497,18 +1529,59 @@ def adjust_zoom(delta):
     last_zoom_change_time = time.time()
 
 
+def restore_ir_filter_state():
+    """Przywróć ostatni zapisany stan filtra IR przy starcie"""
+    global ir_mode_day, camera_settings
+
+    # Sprawdź czy w konfiguracji jest zapisany stan filtra
+    saved_state = camera_settings.get("ir_filter_day_mode", True)
+
+    # Jeśli zapisany stan jest inny niż domyślny (True = dzień), przełącz
+    if saved_state != ir_mode_day:
+        print(f"[IR] Przywracanie zapisanego stanu: {'DZIEŃ' if saved_state else 'NOC'}")
+
+        if saved_state:
+            # Tryb dzienny - włącz filtr IR
+            GPIO.output(IR_CUT_A, GPIO.HIGH)
+            GPIO.output(IR_CUT_B, GPIO.LOW)
+        else:
+            # Tryb nocny - wyłącz filtr IR
+            GPIO.output(IR_CUT_A, GPIO.LOW)
+            GPIO.output(IR_CUT_B, GPIO.HIGH)
+
+        time.sleep(0.1)
+        GPIO.output(IR_CUT_A, GPIO.LOW)
+        GPIO.output(IR_CUT_B, GPIO.LOW)
+
+        ir_mode_day = saved_state
+
+    # Zastosuj Night Vision i latarkę IR jeśli filtr jest wyłączony
+    if not ir_mode_day:
+        camera_settings["night_vision_mode"] = True
+        GPIO.output(IR_LED, GPIO.HIGH)  # HIGH włącza latarkę IR
+        print("[NIGHT VISION] Przywrócono tryb Night Vision")
+        print("[IR LED] Latarka IR włączona (HIGH)")
+    else:
+        GPIO.output(IR_LED, GPIO.LOW)  # LOW wyłącza latarkę IR
+        print("[IR LED] Latarka IR wyłączona (LOW)")
+
+    print(f"[IR] Stan filtra: {'DZIEŃ' if ir_mode_day else 'NOC'}")
+
+
 def toggle_ir_cut():
     """Zmienia polaryzację na mostku H, aby przełączyć filtr IR CUT"""
-    global ir_mode_day
+    global ir_mode_day, camera_settings
 
     if ir_mode_day:
+        # POPRAWIONA LOGIKA: Tryb nocny = filtr IR wyłączony (odwrotnie niż było)
         print("[IR] Przełączanie: Tryb NOCNY (Filtr IR OFF)")
-        GPIO.output(IR_CUT_A, GPIO.HIGH)
-        GPIO.output(IR_CUT_B, GPIO.LOW)
+        GPIO.output(IR_CUT_A, GPIO.LOW)  # Odwrócone
+        GPIO.output(IR_CUT_B, GPIO.HIGH)  # Odwrócone
     else:
+        # POPRAWIONA LOGIKA: Tryb dzienny = filtr IR włączony (odwrotnie niż było)
         print("[IR] Przełączanie: Tryb DZIEŃ (Filtr IR ON)")
-        GPIO.output(IR_CUT_A, GPIO.LOW)
-        GPIO.output(IR_CUT_B, GPIO.HIGH)
+        GPIO.output(IR_CUT_A, GPIO.HIGH)  # Odwrócone
+        GPIO.output(IR_CUT_B, GPIO.LOW)   # Odwrócone
 
     # Krótki impuls wystarczy do przełączenia mechanicznego filtra
     time.sleep(0.1)
@@ -1518,6 +1591,26 @@ def toggle_ir_cut():
 
     ir_mode_day = not ir_mode_day
     print(f"[IR] Tryb: {'DZIEŃ' if ir_mode_day else 'NOC'}")
+
+    # Automatyczne włączenie/wyłączenie Night Vision i latarki IR
+    if not ir_mode_day:
+        # Filtr IR wyłączony (noc) - włącz Night Vision i latarkę IR
+        camera_settings["night_vision_mode"] = True
+        GPIO.output(IR_LED, GPIO.HIGH)  # HIGH włącza latarkę IR
+        print("[NIGHT VISION] Automatycznie włączony")
+        print("[IR LED] Latarka IR włączona (HIGH)")
+        apply_camera_settings()
+    else:
+        # Filtr IR włączony (dzień) - wyłącz Night Vision i latarkę IR
+        camera_settings["night_vision_mode"] = False
+        GPIO.output(IR_LED, GPIO.LOW)  # LOW wyłącza latarkę IR
+        print("[NIGHT VISION] Automatycznie wyłączony")
+        print("[IR LED] Latarka IR wyłączona (LOW)")
+        apply_camera_settings()
+
+    # Zapisz stan filtra IR do pliku JSON
+    camera_settings["ir_filter_day_mode"] = ir_mode_day
+    save_config()
 
 
 def add_date_overlay_to_video(video_path):
@@ -4597,8 +4690,16 @@ def init_matrix():
     GPIO.output(IR_CUT_A, GPIO.LOW)
     GPIO.output(IR_CUT_B, GPIO.LOW)
 
+    # Konfiguruj pin latarki IR
+    GPIO.setup(IR_LED, GPIO.OUT)
+    GPIO.output(IR_LED, GPIO.LOW)  # LOW wyłącza latarkę IR (domyślnie wyłączona)
+
+    # Przywróć ostatni zapisany stan filtra IR
+    restore_ir_filter_state()
+
     print("[OK] Matryca 4x4 OK")
     print("[OK] IR Cut Filter OK")
+    print("[OK] IR LED OK")
 
 
 def scan_matrix():
