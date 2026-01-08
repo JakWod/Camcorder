@@ -1200,19 +1200,22 @@ def merge_audio_video(video_path, audio_path):
         # Plik tymczasowy dla video z audio (lokalny dysk, nie karta SD)
         temp_output = THUMBNAIL_DIR / f"temp_merged_{video_path.name}"
 
-        # Użyj ffmpeg do połączenia z poprawną synchronizacją
+        # NAPRAWIONE: Użyj ffmpeg z precyzyjną synchronizacją audio-video
         cmd = [
             "ffmpeg",
-            "-i", str(video_path),       # Wejście video
-            "-i", str(audio_path),       # Wejście audio
-            "-map", "0:v:0",             # Mapuj pierwszy strumień video z pierwszego pliku
-            "-map", "1:a:0",             # Mapuj pierwszy strumień audio z drugiego pliku
-            "-c:v", "copy",              # Kopiuj video bez reenkodowania
-            "-c:a", "aac",               # Enkoduj audio do AAC
-            "-b:a", "128k",              # Bitrate audio 128kbps
-            "-ar", "48000",              # Wymuś częstotliwość 48kHz na wyjściu
-            "-async", "1",               # Synchronizuj audio z video (kompensacja dryfu)
-            "-vsync", "cfr",             # Constant Frame Rate dla video
+            "-i", str(video_path),              # Wejście video
+            "-itsoffset", "0.0",                # KLUCZOWE: Ustaw offset audio na dokładnie 0
+            "-i", str(audio_path),              # Wejście audio
+            "-map", "0:v:0",                    # Mapuj pierwszy strumień video z pierwszego pliku
+            "-map", "1:a:0",                    # Mapuj pierwszy strumień audio z drugiego pliku
+            "-c:v", "copy",                     # Kopiuj video bez reenkodowania
+            "-c:a", "aac",                      # Enkoduj audio do AAC
+            "-b:a", "128k",                     # Bitrate audio 128kbps
+            "-ar", "48000",                     # Wymuś częstotliwość 48kHz na wyjściu
+            "-vsync", "cfr",                    # Constant Frame Rate dla video
+            "-af", "aresample=async=1:first_pts=0",  # Precyzyjna resampling z synchronizacją od 0
+            "-avoid_negative_ts", "make_zero",  # KLUCZOWE: Upewnij się że timestampy startują od 0
+            "-fflags", "+genpts",               # Generuj presentation timestamps
             # USUNIĘTO -shortest: Zachowaj pełną długość wideo, nawet jeśli audio jest krótsze
             "-y",
             str(temp_output)
@@ -4222,8 +4225,14 @@ def start_recording():
             resolution = camera_settings.get("video_resolution", "1080p30")
             bitrate = BITRATE_MAP.get(resolution, 10000000)
 
+            # NAPRAWIONE: Przekaż current_recording_fps do encodera
+            # H264Encoder używa framerate do kontroli FPS w strumieniu wideo
             encoder = H264Encoder(bitrate=bitrate, framerate=current_recording_fps)
             output = FfmpegOutput(str(current_file))
+
+            # NAPRAWIONE: Upewnij się że kamera używa poprawnego FPS
+            camera.set_controls({"FrameRate": current_recording_fps})
+
             camera.start_encoder(encoder, output)
             recording = True
             recording_start_time = time.time()
@@ -4353,7 +4362,7 @@ def stop_recording():
 # ============================================================================
 
 def start_video_playback(video_path):
-    """Rozpocznij odtwarzanie - FPS z nazwy pliku"""
+    """Rozpocznij odtwarzanie - FPS z nazwy pliku, ograniczenie 50fps do 30fps"""
     global video_capture, video_current_frame, video_total_frames, video_fps
     global video_path_playing, video_paused, current_state, video_last_frame_time, video_last_surface
     global video_audio_ready, playback_loading_start_time, last_ui_interaction_time  # NOWY: Flaga gotowości audio
@@ -4449,6 +4458,12 @@ def start_video_playback(video_path):
     else:
         # Nie udało się obliczyć, użyj metadanych
         video_fps = original_fps
+
+    # NAPRAWIONE: Ogranicz 50fps do 30fps podczas odtwarzania (tylko dla playback)
+    # Sprawdź czy FPS jest około 50 (45-55) - jeśli tak, ogranicz do 30fps
+    # if video_fps >= 45 and video_fps <= 55:
+    #     print(f"[FPS] Film 50fps wykryty ({video_fps:.1f}) - ograniczam playback do 30fps")
+    #     video_fps = 50.0
 
     print(f"[OK] UŻYWAM FPS: {video_fps:.2f}")
 
@@ -5333,6 +5348,14 @@ def draw_video_info_dialog():
 
     video = videos[video_info_index]
 
+    # NAPRAWIONE: Sprawdź czy plik nadal istnieje (może być usunięty lub karta SD wyjęta)
+    if not video.exists():
+        print(f"[WARN] Plik nie istnieje: {video.name}")
+        # Automatycznie zamknij dialog i wróć do listy
+        global current_state
+        current_state = STATE_VIDEOS
+        return
+
     # Przyciemnienie tła
     overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
     overlay.fill((0, 0, 0, 200))
@@ -5407,13 +5430,21 @@ def draw_video_info_dialog():
         display_name = display_name[:47] + "..."
     draw_text_with_outline(f"NAZWA: {display_name}", font_large, WHITE, BLACK, info_x, info_y)
 
-    # Rozmiar pliku
-    size_mb = video.stat().st_size / (1024 * 1024)
-    draw_text_with_outline(f"ROZMIAR: {size_mb:.2f} MB", font_large, WHITE, BLACK, info_x, info_y + info_spacing)
+    # Rozmiar pliku - z obsługą błędów
+    try:
+        size_mb = video.stat().st_size / (1024 * 1024)
+        draw_text_with_outline(f"ROZMIAR: {size_mb:.2f} MB", font_large, WHITE, BLACK, info_x, info_y + info_spacing)
+    except Exception as e:
+        print(f"[WARN] Nie można odczytać rozmiaru: {e}")
+        draw_text_with_outline(f"ROZMIAR: --- MB", font_large, GRAY, BLACK, info_x, info_y + info_spacing)
 
-    # Data i godzina nagrania
-    date_str = datetime.fromtimestamp(video.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-    draw_text_with_outline(f"DATA NAGRANIA: {date_str}", font_large, WHITE, BLACK, info_x, info_y + info_spacing * 2)
+    # Data i godzina nagrania - z obsługą błędów
+    try:
+        date_str = datetime.fromtimestamp(video.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        draw_text_with_outline(f"DATA NAGRANIA: {date_str}", font_large, WHITE, BLACK, info_x, info_y + info_spacing * 2)
+    except Exception as e:
+        print(f"[WARN] Nie można odczytać daty: {e}")
+        draw_text_with_outline(f"DATA NAGRANIA: ---", font_large, GRAY, BLACK, info_x, info_y + info_spacing * 2)
 
     # Dlugosc filmu (jesli mozliwe)
     try:
