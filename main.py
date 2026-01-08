@@ -91,11 +91,9 @@ STATE_VIDEOS = 1
 STATE_CONFIRM = 2
 STATE_PLAYING = 3
 STATE_MENU = 4
-STATE_SUBMENU = 5
 STATE_VIDEO_CONTEXT_MENU = 6
 STATE_VIDEO_INFO = 7
 STATE_SELECTION_POPUP = 8
-STATE_DATE_PICKER = 9
 
 # Globalne zmienne
 camera = None
@@ -124,8 +122,8 @@ audio_monitoring_thread = None  # NOWY: Wątek monitorujący poziom audio
 audio_monitoring_active = False  # NOWY: Czy monitoring jest aktywny
 AUDIO_CHUNK = 1024
 AUDIO_FORMAT = pyaudio.paInt16
-AUDIO_CHANNELS = 2
-AUDIO_RATE = 44100
+AUDIO_CHANNELS = 1
+AUDIO_RATE = 48000  # 48kHz - natywna częstotliwość dla RPi5 i mikrofonów USB
 
 # INA219 Battery Monitor
 BATTERY_CAPACITY_MAH = 2300  # Pojedyncza bateria 18650 2300mAh (3S)
@@ -205,11 +203,6 @@ pause_icon = None  # Obrazek ikony pauzy
 # Menu System
 menu_tiles = []
 selected_tile = 0
-submenu_items = []
-submenu_selected = 0
-submenu_editing = False
-submenu_edit_value = ""
-current_submenu = None
 last_menu_scroll = 0
 last_videos_scroll = 0
 menu_editing_mode = False  # True = edytujemy wartości, False = wybieramy sekcję
@@ -742,7 +735,7 @@ def extract_fps_from_filename(filename):
 
 def init_audio():
     """Inicjalizuj PyAudio i wykryj mikrofon"""
-    global audio, audio_device_index
+    global audio, audio_device_index, AUDIO_CHANNELS
 
     # Wycisz ostrzeżenia ALSA
     import os
@@ -805,8 +798,15 @@ def init_audio():
                 default_input = audio.get_default_input_device_info()
             if default_input['maxInputChannels'] > 0:
                 audio_device_index = default_input['index']
+                device_channels = int(default_input['maxInputChannels'])
                 print(f"[AUDIO] Domyślne urządzenie: {default_input['name']}")
                 print(f"[AUDIO] Device index: {audio_device_index}")
+                print(f"[AUDIO] Kanały urządzenia: {device_channels}")
+
+                # AUTO-DETECT: Ustaw liczbę kanałów na podstawie możliwości urządzenia
+                # Większość mikrofonów to mono (1), niektóre to stereo (2)
+                AUDIO_CHANNELS = min(device_channels, 2)  # Użyj 1 lub 2, zależnie od urządzenia
+                print(f"[AUDIO] Używam {AUDIO_CHANNELS} kanałów")
 
                 # TEST - Spróbuj otworzyć stream aby sprawdzić czy działa
                 try:
@@ -830,12 +830,17 @@ def init_audio():
         # Jeśli domyślne nie działa, testuj wszystkie dostępne urządzenia
         print("[AUDIO] Testuję wszystkie dostępne urządzenia wejściowe...")
         for idx, info in input_devices:
-            print(f"[AUDIO] Próba {idx}: {info['name']}")
+            device_channels = int(info['maxInputChannels'])
+            print(f"[AUDIO] Próba {idx}: {info['name']} ({device_channels} kanałów)")
+
+            # AUTO-DETECT kanały dla tego urządzenia
+            test_channels = min(device_channels, 2)
+
             try:
                 with suppress_alsa_errors():
                     test_stream = audio.open(
                         format=AUDIO_FORMAT,
-                        channels=AUDIO_CHANNELS,
+                        channels=test_channels,
                         rate=AUDIO_RATE,
                         input=True,
                         input_device_index=idx,
@@ -845,7 +850,9 @@ def init_audio():
 
                 # Jeśli test się powiódł, użyj tego urządzenia
                 audio_device_index = idx
+                AUDIO_CHANNELS = test_channels
                 print(f"[AUDIO] ✓ SUKCES! Używam urządzenia {idx}: {info['name']}")
+                print(f"[AUDIO] Używam {AUDIO_CHANNELS} kanałów")
                 return True
             except Exception as e:
                 print(f"[AUDIO] ✗ Urządzenie {idx} nie działa: {e}")
@@ -867,37 +874,55 @@ def init_audio():
 
 
 def calculate_audio_level(data):
-    """Oblicz poziom głośności z danych audio (RMS) dla dwóch kanałów)"""
+    """Oblicz poziom głośności z danych audio (RMS) dla jednego lub dwóch kanałów"""
     try:
         # Konwertuj bajty na wartości int16
         audio_data = np.frombuffer(data, dtype=np.int16)
 
-        # Dane są przeplatane (L1, R1, L2, R2, ...)
-        # Oddziel kanał lewy (indeksy parzyste: 0, 2, 4, ...)
-        audio_data_left = audio_data[0::2].astype(np.float64)
-        # Oddziel kanał prawy (indeksy nieparzyste: 1, 3, 5, ...)
-        audio_data_right = audio_data[1::2].astype(np.float64)
+        if AUDIO_CHANNELS == 2:
+            # Stereo: Dane są przeplatane (L1, R1, L2, R2, ...)
+            # Oddziel kanał lewy (indeksy parzyste: 0, 2, 4, ...)
+            audio_data_left = audio_data[0::2].astype(np.float64)
+            # Oddziel kanał prawy (indeksy nieparzyste: 1, 3, 5, ...)
+            audio_data_right = audio_data[1::2].astype(np.float64)
 
-        # Oblicz RMS (Root Mean Square) dla kanału L
-        mean_square_left = np.mean(audio_data_left**2)
-        rms_left = np.sqrt(mean_square_left) if mean_square_left >= 0 else 0.0
+            # Oblicz RMS (Root Mean Square) dla kanału L
+            mean_square_left = np.mean(audio_data_left**2)
+            rms_left = np.sqrt(mean_square_left) if mean_square_left >= 0 else 0.0
 
-        # Oblicz RMS dla kanału R
-        mean_square_right = np.mean(audio_data_right**2)
-        rms_right = np.sqrt(mean_square_right) if mean_square_right >= 0 else 0.0
+            # Oblicz RMS dla kanału R
+            mean_square_right = np.mean(audio_data_right**2)
+            rms_right = np.sqrt(mean_square_right) if mean_square_right >= 0 else 0.0
 
-        # Normalizuj do zakresu 0.0 - 1.0 (max int16 to 32768)
-        normalized_left = min(1.0, rms_left / 32768.0)
-        normalized_right = min(1.0, rms_right / 32768.0)
+            # Normalizuj do zakresu 0.0 - 1.0 (max int16 to 32768)
+            normalized_left = min(1.0, rms_left / 32768.0)
+            normalized_right = min(1.0, rms_right / 32768.0)
 
-        # Zastosuj nieliniową skalę (logarytmiczną) dla lepszej wizualizacji (jak wcześniej)
-        if normalized_left > 0:
-            normalized_left = min(1.0, normalized_left * 10)
-        if normalized_right > 0:
-            normalized_right = min(1.0, normalized_right * 10)
+            # Zastosuj nieliniową skalę (logarytmiczną) dla lepszej wizualizacji
+            if normalized_left > 0:
+                normalized_left = min(1.0, normalized_left * 10)
+            if normalized_right > 0:
+                normalized_right = min(1.0, normalized_right * 10)
 
-        # Zwróć poziomy dla obu kanałów
-        return normalized_left, normalized_right
+            return normalized_left, normalized_right
+
+        else:
+            # Mono: Tylko jeden kanał - użyj tego samego poziomu dla L i R
+            audio_data_mono = audio_data.astype(np.float64)
+
+            # Oblicz RMS (Root Mean Square)
+            mean_square = np.mean(audio_data_mono**2)
+            rms = np.sqrt(mean_square) if mean_square >= 0 else 0.0
+
+            # Normalizuj do zakresu 0.0 - 1.0 (max int16 to 32768)
+            normalized = min(1.0, rms / 32768.0)
+
+            # Zastosuj nieliniową skalę (logarytmiczną) dla lepszej wizualizacji
+            if normalized > 0:
+                normalized = min(1.0, normalized * 10)
+
+            # Zwróć ten sam poziom dla L i R (mikrofon mono)
+            return normalized, normalized
 
     except Exception as e:
         # W przypadku błędu zwróć 0.0 dla obu
@@ -1175,15 +1200,20 @@ def merge_audio_video(video_path, audio_path):
         # Plik tymczasowy dla video z audio (lokalny dysk, nie karta SD)
         temp_output = THUMBNAIL_DIR / f"temp_merged_{video_path.name}"
 
-        # Użyj ffmpeg do połączenia
+        # Użyj ffmpeg do połączenia z poprawną synchronizacją
         cmd = [
             "ffmpeg",
-            "-i", str(video_path),
-            "-i", str(audio_path),
-            "-c:v", "copy",  # Kopiuj video bez reenkodowania
-            "-c:a", "aac",   # Enkoduj audio do AAC
-            "-b:a", "128k",  # Bitrate audio 128kbps
-            "-shortest",     # Użyj krótszego strumienia
+            "-i", str(video_path),       # Wejście video
+            "-i", str(audio_path),       # Wejście audio
+            "-map", "0:v:0",             # Mapuj pierwszy strumień video z pierwszego pliku
+            "-map", "1:a:0",             # Mapuj pierwszy strumień audio z drugiego pliku
+            "-c:v", "copy",              # Kopiuj video bez reenkodowania
+            "-c:a", "aac",               # Enkoduj audio do AAC
+            "-b:a", "128k",              # Bitrate audio 128kbps
+            "-ar", "48000",              # Wymuś częstotliwość 48kHz na wyjściu
+            "-async", "1",               # Synchronizuj audio z video (kompensacja dryfu)
+            "-vsync", "cfr",             # Constant Frame Rate dla video
+            # USUNIĘTO -shortest: Zachowaj pełną długość wideo, nawet jeśli audio jest krótsze
             "-y",
             str(temp_output)
         ]
@@ -1743,7 +1773,7 @@ def add_date_overlay_to_video(video_path):
         
         print(f"[VIDEO] Filtr: {drawtext_filter}")
         
-        # Komenda ffmpeg
+        # Komenda ffmpeg - NAPRAWIONE: kopiuj wszystkie klatki bez dropping
         cmd = [
             "ffmpeg",
             "-i", str(video_path),
@@ -1751,7 +1781,7 @@ def add_date_overlay_to_video(video_path):
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "23",
-            "-fps_mode", "passthrough",
+            "-vsync", "0",  # Passthrough timing - NIE zmieniaj liczby klatek
             "-c:a", "copy",
             "-y",
             str(temp_file)
@@ -1963,74 +1993,6 @@ def init_menu_tiles():
     ]
 
 
-def init_submenu(tile_id):
-    """Inicjalizuj submenu"""
-    global submenu_items, current_submenu
-    
-    current_submenu = tile_id
-    
-    if tile_id == "quality":
-        submenu_items = [
-            {"type": "header", "text": "[VIDEO] IMAGE QUALITY/SIZE"},
-            {"type": "spacer"},
-            {"type": "select", "label": "Rozdzielczość", "key": "video_resolution", "options": VIDEO_RESOLUTIONS},
-            {"type": "toggle", "label": "Siatka pomocnicza", "key": "show_grid"},
-            {"type": "select", "label": "Czcionka", "key": "font_family", "options": FONT_NAMES},
-            {"type": "spacer"},
-            {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
-        ]
-
-    elif tile_id == "font":
-        submenu_items = [
-            {"type": "header", "text": "[VIDEO] CZCIONKA"},
-            {"type": "spacer"},
-            {"type": "select", "label": "Czcionka", "key": "font_family", "options": FONT_NAMES},
-            {"type": "spacer"},
-            {"type": "info", "text": "Zmiana czcionki wymaga"},
-            {"type": "info", "text": "przeladowania interfejsu"},
-        ]
-
-    elif tile_id == "manual":
-        submenu_items = [
-            {"type": "header", "text": "[CONFIG] MANUAL SETTINGS"},
-            {"type": "spacer"},
-            {"type": "select", "label": "White Balance", "key": "awb_mode", "options": WB_MODES},
-            {"type": "select", "label": "ISO", "key": "iso_mode", "options": ISO_MODES},
-            {"type": "slider", "label": "Jasność", "key": "brightness", "min": -2.0, "max": 2.0, "step": 0.2},
-            {"type": "slider", "label": "Kontrast", "key": "contrast", "min": 0.0, "max": 2.0, "step": 0.1},
-            {"type": "slider", "label": "Saturacja", "key": "saturation", "min": 0.0, "max": 2.0, "step": 0.1},
-            {"type": "slider", "label": "Ostrość", "key": "sharpness", "min": 0.0, "max": 4.0, "step": 0.2},
-            {"type": "slider", "label": "Ekspozycja", "key": "exposure_compensation", "min": -2.0, "max": 2.0, "step": 0.2},
-            {"type": "spacer"},
-            {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
-        ]
-
-    elif tile_id == "date":
-        submenu_items = [
-            {"type": "header", "text": "[DATE] ZNACZNIK DATY"},
-            {"type": "spacer"},
-            {"type": "toggle", "label": "Pokaż date", "key": "show_date"},
-            {"type": "toggle", "label": "Pokaż godzine", "key": "show_time"},
-            {"type": "select", "label": "Pozycja daty", "key": "date_position", "options": DATE_POSITIONS},
-            {"type": "select", "label": "Format daty", "key": "date_format", "options": DATE_FORMATS},
-            {"type": "toggle", "label": "Miesiąc słownie", "key": "date_month_text"},
-            {"type": "select", "label": "Separator daty", "key": "date_separator", "options": DATE_SEPARATORS},
-            {"type": "select", "label": "Kolor daty", "key": "date_color", "options": DATE_COLORS},
-            {"type": "text", "label": "Reczna data", "key": "manual_date", "placeholder": "YYYY-MM-DD"},
-            {"type": "spacer"},
-            {"type": "button", "label": "[RESET] RESET USTAWIEN", "action": "reset_section"},
-        ]
-
-    elif tile_id == "battery":
-        submenu_items = [
-            {"type": "header", "text": "[BATT] POZIOM BATERII"},
-            {"type": "spacer"},
-            {"type": "battery_slider", "label": "Fikcyjny poziom", "key": "fake_battery", "min": 0, "max": 100, "step": 5},
-            {"type": "spacer"},
-            {"type": "button", "label": "[RESET] UZYJ RZECZYWISTEGO", "action": "reset_battery"},
-        ]
-
-
 def open_menu():
     """Otwórz menu główne"""
     global current_state, selected_tile, menu_editing_mode, selected_section, menu_value_editing
@@ -2044,38 +2006,15 @@ def open_menu():
     print("\n[MENU] MENU OTWARTE")
 
 
-def open_submenu(tile_id):
-    """Otwórz submenu"""
-    global current_state, submenu_selected, submenu_editing
-    
-    init_submenu(tile_id)
-    submenu_selected = 2
-    submenu_editing = False
-    current_state = STATE_SUBMENU
-    print(f"\n[SUBMENU] Submenu: {tile_id}")
-
-
 def close_menu():
     """Zamknij menu"""
-    global current_state, submenu_editing, menu_value_editing
+    global current_state, menu_value_editing
 
     save_config()
     apply_camera_settings()
-    submenu_editing = False
     menu_value_editing = False
     current_state = STATE_MAIN
     print("\n[MAIN] Ekran główny")
-
-
-def close_submenu():
-    """Zamknij submenu"""
-    global current_state, submenu_editing
-    
-    save_config()
-    apply_camera_settings()
-    submenu_editing = False
-    current_state = STATE_MENU
-    print("\n[MENU] Menu główne")
 
 
 def menu_navigate_left():
@@ -2190,105 +2129,6 @@ def menu_navigate_up():
             selected_section = max(0, selected_section - 1)
 
 
-def submenu_navigate_up():
-    """Nawigacja w górę w submenu"""
-    global submenu_selected, fake_battery_level
-
-    if submenu_editing:
-        item = submenu_items[submenu_selected]
-        if item["type"] == "slider":
-            key = item["key"]
-            camera_settings[key] = min(item["max"], camera_settings[key] + item["step"])
-            apply_camera_settings()
-        elif item["type"] == "battery_slider":
-            current_level = fake_battery_level if fake_battery_level is not None else 100
-            fake_battery_level = min(item["max"], current_level + item["step"])
-        elif item["type"] == "select":
-            key = item["key"]
-            options = item["options"]
-            current_idx = options.index(camera_settings[key]) if camera_settings[key] in options else 0
-            new_idx = (current_idx + 1) % len(options)
-            camera_settings[key] = options[new_idx]
-            if key == "font_family":
-                load_fonts()  # Przeładuj czcionki
-                save_config()
-            else:
-                apply_camera_settings()
-    else:
-        submenu_selected = max(0, submenu_selected - 1)
-        while submenu_selected > 0 and submenu_items[submenu_selected]["type"] in ["spacer", "header", "info"]:
-            submenu_selected -= 1
-
-
-def submenu_navigate_down():
-    """Nawigacja w dół w submenu"""
-    global submenu_selected, fake_battery_level
-
-    if submenu_editing:
-        item = submenu_items[submenu_selected]
-        if item["type"] == "slider":
-            key = item["key"]
-            camera_settings[key] = max(item["min"], camera_settings[key] - item["step"])
-            apply_camera_settings()
-        elif item["type"] == "battery_slider":
-            current_level = fake_battery_level if fake_battery_level is not None else 100
-            fake_battery_level = max(item["min"], current_level - item["step"])
-        elif item["type"] == "select":
-            key = item["key"]
-            options = item["options"]
-            current_idx = options.index(camera_settings[key]) if camera_settings[key] in options else 0
-            new_idx = (current_idx - 1) % len(options)
-            camera_settings[key] = options[new_idx]
-            if key == "font_family":
-                load_fonts()  # Przeładuj czcionki
-                save_config()
-            else:
-                apply_camera_settings()
-    else:
-        submenu_selected = min(len(submenu_items) - 1, submenu_selected + 1)
-        while submenu_selected < len(submenu_items) - 1 and submenu_items[submenu_selected]["type"] in ["spacer", "header", "info"]:
-            submenu_selected += 1
-
-
-def submenu_ok():
-    """Akcja OK w submenu"""
-    global submenu_editing, submenu_edit_value
-    
-    item = submenu_items[submenu_selected]
-    
-    if item["type"] == "button":
-        if item["action"] == "reset_section":
-            if current_submenu == "quality":
-                reset_quality_settings()
-            elif current_submenu == "manual":
-                reset_manual_settings()
-            elif current_submenu == "date":
-                reset_date_settings()
-        elif item["action"] == "reset_battery":
-            global fake_battery_level
-            fake_battery_level = None
-
-    elif item["type"] == "toggle":
-        key = item["key"]
-        camera_settings[key] = not camera_settings[key]
-        save_config()
-
-    elif item["type"] in ["slider", "select", "battery_slider"]:
-        submenu_editing = not submenu_editing
-    
-    elif item["type"] == "text":
-        if not submenu_editing:
-            submenu_editing = True
-            key = item["key"]
-            submenu_edit_value = camera_settings[key] if camera_settings[key] else ""
-        else:
-            key = item["key"]
-            camera_settings[key] = submenu_edit_value if submenu_edit_value else None
-            submenu_editing = False
-            submenu_edit_value = ""
-            save_config()
-
-
 def open_selection_popup(tile_id, options):
     """Otwórz małe okienko wyboru z listy opcji"""
     global current_state, popup_options, popup_selected, popup_tile_id
@@ -2305,35 +2145,6 @@ def open_selection_popup(tile_id, options):
 
     current_state = STATE_SELECTION_POPUP
     print(f"[POPUP] Otwarto popup wyboru dla: {tile_id}")
-
-
-def open_date_picker():
-    """Otwórz okienko wyboru daty"""
-    global current_state, date_picker_day, date_picker_month, date_picker_year, date_picker_field
-
-    # Inicjalizuj wartościami z manual_date lub aktualna data
-    if camera_settings.get("manual_date"):
-        try:
-            from datetime import datetime
-            date_obj = datetime.strptime(camera_settings["manual_date"], "%Y-%m-%d")
-            date_picker_day = date_obj.day
-            date_picker_month = date_obj.month
-            date_picker_year = date_obj.year
-        except:
-            now = datetime.now()
-            date_picker_day = now.day
-            date_picker_month = now.month
-            date_picker_year = now.year
-    else:
-        from datetime import datetime
-        now = datetime.now()
-        date_picker_day = now.day
-        date_picker_month = now.month
-        date_picker_year = now.year
-
-    date_picker_field = 0  # Zacznij od dnia
-    current_state = STATE_DATE_PICKER
-    print("[DATE_PICKER] Otwarto date picker")
 
 
 def close_popup():
@@ -2376,67 +2187,6 @@ def popup_confirm():
 
         print(f"[POPUP] Wybrano: {selected_value}")
         close_popup()
-
-
-def date_picker_navigate_left():
-    """Nawigacja w lewo w date picker - przełącz pole"""
-    global date_picker_field
-    date_picker_field = max(0, date_picker_field - 1)
-
-
-def date_picker_navigate_right():
-    """Nawigacja w prawo w date picker - przełącz pole"""
-    global date_picker_field
-    date_picker_field = min(2, date_picker_field + 1)
-
-
-def date_picker_navigate_up():
-    """Zwiększ wartość aktualnego pola"""
-    global date_picker_day, date_picker_month, date_picker_year
-
-    if date_picker_field == 0:  # Dzień
-        date_picker_day = min(31, date_picker_day + 1)
-    elif date_picker_field == 1:  # Miesiąc
-        date_picker_month = min(12, date_picker_month + 1)
-    elif date_picker_field == 2:  # Rok
-        date_picker_year = min(2099, date_picker_year + 1)
-
-
-def date_picker_navigate_down():
-    """Zmniejsz wartość aktualnego pola"""
-    global date_picker_day, date_picker_month, date_picker_year
-
-    if date_picker_field == 0:  # Dzień
-        date_picker_day = max(1, date_picker_day - 1)
-    elif date_picker_field == 1:  # Miesiąc
-        date_picker_month = max(1, date_picker_month - 1)
-    elif date_picker_field == 2:  # Rok
-        date_picker_year = max(2000, date_picker_year - 1)
-
-
-def date_picker_confirm():
-    """Zatwierdź wybraną datę"""
-    global camera_settings, current_state
-
-    # Walidacja daty
-    max_days = 31
-    if date_picker_month in [4, 6, 9, 11]:
-        max_days = 30
-    elif date_picker_month == 2:
-        # Sprawdź rok przestępny
-        is_leap = (date_picker_year % 4 == 0 and date_picker_year % 100 != 0) or (date_picker_year % 400 == 0)
-        max_days = 29 if is_leap else 28
-
-    # Ogranicz dzień do maksymalnej wartości
-    valid_day = min(date_picker_day, max_days)
-
-    # Zapisz datę w formacie YYYY-MM-DD
-    date_str = f"{date_picker_year:04d}-{date_picker_month:02d}-{valid_day:02d}"
-    camera_settings["manual_date"] = date_str
-    save_config()
-
-    print(f"[DATE_PICKER] Ustawiono datę: {date_str}")
-    current_state = STATE_MENU
 
 
 def draw_menu_tiles(frame):
@@ -2907,7 +2657,7 @@ def draw_menu_bottom_buttons():
     exit_y = bottom_bar_y + 15
 
     # Sprawdź czy jesteśmy w trybie popup
-    in_popup_mode = (current_state == STATE_SELECTION_POPUP or current_state == STATE_DATE_PICKER)
+    in_popup_mode = (current_state == STATE_SELECTION_POPUP)
 
     if in_popup_mode:
         # Tryb popup: COFNIJ / MENU i USTAW / OK (jak w trybie normalnym, ale COFNIJ zamiast WYJDŹ)
@@ -2957,241 +2707,6 @@ def draw_menu_bottom_buttons():
 
         set_x = ok_button_x - 150
         draw_text_with_outline("USTAW", font_large, WHITE, BLACK, set_x, exit_y)
-
-
-def draw_submenu_screen(frame):
-    """Rysuj submenu"""
-    if frame is not None:
-        try:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_resized = cv2.resize(frame_rgb, (SCREEN_WIDTH, SCREEN_HEIGHT))
-            frame_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
-            screen.blit(frame_surface, (0, 0))
-        except:
-            screen.fill(BLACK)
-    else:
-        screen.fill(BLACK)
-    
-    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-    overlay.set_alpha(220)
-    overlay.fill(BLACK)
-    screen.blit(overlay, (0, 0))
-    
-    menu_width = 1000
-    menu_height = SCREEN_HEIGHT - 100
-    menu_x = (SCREEN_WIDTH - menu_width) // 2
-    menu_y = 50
-    
-    pygame.draw.rect(screen, DARK_GRAY, (menu_x, menu_y, menu_width, menu_height), border_radius=20)
-    pygame.draw.rect(screen, BLUE, (menu_x, menu_y, menu_width, menu_height), 4, border_radius=20)
-    
-    item_height = 60
-    visible_items = (menu_height - 100) // item_height
-    scroll_offset = max(0, submenu_selected - visible_items // 2)
-    
-    y = menu_y + 30
-    
-    for i, item in enumerate(submenu_items[scroll_offset:scroll_offset + visible_items + 2]):
-        actual_idx = i + scroll_offset
-        
-        if item["type"] == "header":
-            draw_text(item["text"], font_medium, YELLOW, menu_x + menu_width // 2, y, center=True)
-            y += 50
-        
-        elif item["type"] == "spacer":
-            y += 20
-        
-        elif item["type"] == "slider":
-            is_selected = (actual_idx == submenu_selected)
-
-            if is_selected:
-                pygame.draw.rect(screen, BLUE if not submenu_editing else ORANGE,
-                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
-
-            label_color = YELLOW if is_selected else WHITE
-            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 10)
-
-            value = camera_settings[item["key"]]
-            value_text = f"{value:.1f}"
-            draw_text(value_text, font_small, GREEN if is_selected else GRAY, menu_x + menu_width - 250, y + 10)
-
-            bar_x = menu_x + menu_width - 200
-            bar_y = y + 20
-            bar_width = 150
-            bar_height = 10
-
-            pygame.draw.rect(screen, GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
-
-            fill_ratio = (value - item["min"]) / (item["max"] - item["min"])
-            fill_width = int(bar_width * fill_ratio)
-            pygame.draw.rect(screen, GREEN, (bar_x, bar_y, fill_width, bar_height), border_radius=5)
-
-            y += item_height
-
-        elif item["type"] == "battery_slider":
-            is_selected = (actual_idx == submenu_selected)
-
-            if is_selected:
-                pygame.draw.rect(screen, BLUE if not submenu_editing else ORANGE,
-                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
-
-            label_color = YELLOW if is_selected else WHITE
-            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 10)
-
-            value = fake_battery_level if fake_battery_level is not None else 100
-            value_text = f"{value}%" if fake_battery_level is not None else "AUTO"
-            draw_text(value_text, font_small, GREEN if is_selected else GRAY, menu_x + menu_width - 250, y + 10)
-
-            bar_x = menu_x + menu_width - 200
-            bar_y = y + 20
-            bar_width = 150
-            bar_height = 10
-
-            pygame.draw.rect(screen, GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
-
-            fill_ratio = (value - item["min"]) / (item["max"] - item["min"])
-            fill_width = int(bar_width * fill_ratio)
-            pygame.draw.rect(screen, GREEN, (bar_x, bar_y, fill_width, bar_height), border_radius=5)
-
-            y += item_height
-        
-        elif item["type"] == "select":
-            is_selected = (actual_idx == submenu_selected)
-            
-            if is_selected:
-                pygame.draw.rect(screen, BLUE if not submenu_editing else ORANGE, 
-                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
-            
-            label_color = YELLOW if is_selected else WHITE
-            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 15)
-            
-            value = camera_settings[item["key"]]
-            value_color = GREEN if is_selected else GRAY
-            draw_text(f"< {value} >", font_small, value_color, menu_x + menu_width - 250, y + 15)
-            
-            y += item_height
-        
-        elif item["type"] == "toggle":
-            is_selected = (actual_idx == submenu_selected)
-            
-            if is_selected:
-                pygame.draw.rect(screen, BLUE, 
-                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
-            
-            label_color = YELLOW if is_selected else WHITE
-            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 15)
-            
-            value = camera_settings[item["key"]]
-            toggle_text = "[YES] TAK" if value else "[NO] NIE"
-            toggle_color = GREEN if value else RED
-            draw_text(toggle_text, font_small, toggle_color, menu_x + menu_width - 200, y + 15)
-            
-            y += item_height
-        
-        elif item["type"] == "text":
-            is_selected = (actual_idx == submenu_selected)
-            
-            if is_selected:
-                pygame.draw.rect(screen, BLUE if not submenu_editing else ORANGE, 
-                               (menu_x + 20, y - 5, menu_width - 40, item_height - 10), border_radius=10)
-            
-            label_color = YELLOW if is_selected else WHITE
-            draw_text(item["label"], font_small, label_color, menu_x + 40, y + 15)
-            
-            if submenu_editing and is_selected:
-                value_text = submenu_edit_value + "_"
-            else:
-                value = camera_settings[item["key"]]
-                value_text = value if value else item.get("placeholder", "---")
-            
-            value_color = GREEN if is_selected else GRAY
-            draw_text(value_text, font_tiny, value_color, menu_x + menu_width - 400, y + 15)
-            
-            y += item_height
-        
-        elif item["type"] == "info":
-            # Wyświetl tekst informacyjny (nie można go zaznaczyć)
-            draw_text(item["text"], font_tiny, GRAY, menu_x + menu_width // 2, y + 10, center=True)
-            y += 30
-
-        elif item["type"] == "button":
-            is_selected = (actual_idx == submenu_selected)
-
-            button_color = RED if "RESET" in item["label"] else GREEN
-
-            if is_selected:
-                pygame.draw.rect(screen, button_color,
-                               (menu_x + 100, y - 5, menu_width - 200, item_height - 10), border_radius=15)
-                pygame.draw.rect(screen, YELLOW,
-                               (menu_x + 100, y - 5, menu_width - 200, item_height - 10), 5, border_radius=15)
-            else:
-                pygame.draw.rect(screen, button_color,
-                               (menu_x + 100, y - 5, menu_width - 200, item_height - 10), border_radius=15)
-
-            draw_text(item["label"], font_medium, WHITE, menu_x + menu_width // 2, y + 20, center=True)
-
-            y += item_height + 10
-
-    # Wskaźniki scrollowania
-    total_items = len(submenu_items)
-
-    # Zlicz tylko elementy które są opcjami (pomijamy header, spacer, info)
-    selectable_items = sum(1 for item in submenu_items if item["type"] not in ["header", "spacer", "info"])
-
-    # Pokaż wskaźniki gdy jest więcej niż 8 opcji
-    has_more_below = (scroll_offset + visible_items + 2) < total_items
-    has_more_above = scroll_offset > 0
-
-    # Pokaż wskaźniki gdy jest więcej niż 8 wybieralnych opcji
-    if selectable_items > 8:
-
-        # Strzałka w dół - gdy są więcej opcji poniżej
-        if has_more_below:
-            arrow_y = menu_y + menu_height - 30
-            arrow_x = menu_x + menu_width // 2
-            # Rysuj trójkąt skierowany w dół
-            arrow_size = 15
-            # Czarny outline (większy trójkąt)
-            outline_size = arrow_size + 3
-            pygame.draw.polygon(screen, BLACK, [
-                (arrow_x, arrow_y + outline_size),  # Dolny wierzchołek
-                (arrow_x - outline_size, arrow_y),   # Lewy górny wierzchołek
-                (arrow_x + outline_size, arrow_y)    # Prawy górny wierzchołek
-            ])
-            # Żółty trójkąt na wierzchu
-            pygame.draw.polygon(screen, YELLOW, [
-                (arrow_x, arrow_y + arrow_size),  # Dolny wierzchołek
-                (arrow_x - arrow_size, arrow_y),   # Lewy górny wierzchołek
-                (arrow_x + arrow_size, arrow_y)    # Prawy górny wierzchołek
-            ])
-
-        # Strzałka w górę - gdy są więcej opcji powyżej
-        if has_more_above:
-            arrow_y = menu_y + 80  # Poniżej nagłówka
-            arrow_x = menu_x + menu_width // 2
-            # Rysuj trójkąt skierowany w górę
-            arrow_size = 15
-            # Czarny outline (większy trójkąt)
-            outline_size = arrow_size + 3
-            pygame.draw.polygon(screen, BLACK, [
-                (arrow_x, arrow_y - outline_size),  # Górny wierzchołek
-                (arrow_x - outline_size, arrow_y),   # Lewy dolny wierzchołek
-                (arrow_x + outline_size, arrow_y)    # Prawy dolny wierzchołek
-            ])
-            # Żółty trójkąt na wierzchu
-            pygame.draw.polygon(screen, YELLOW, [
-                (arrow_x, arrow_y - arrow_size),  # Górny wierzchołek
-                (arrow_x - arrow_size, arrow_y),   # Lewy dolny wierzchołek
-                (arrow_x + arrow_size, arrow_y)    # Prawy dolny wierzchołek
-            ])
-
-    if submenu_editing:
-        instructions = "Up/Down: Zmień | OK: Zatwierdź | MENU: Anuluj"
-    else:
-        instructions = "Up/Down: Nawigacja | OK: Wybierz | MENU: Wróć"
-
-    draw_text(instructions, font_small, WHITE, SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30,
-             center=True, bg_color=BLACK, padding=10)
 
 
 def draw_selection_popup():
@@ -3409,148 +2924,6 @@ def draw_selection_popup():
                 (arrow_x - arrow_size, arrow_y),   # Lewy dolny wierzchołek
                 (arrow_x + arrow_size, arrow_y)    # Prawy dolny wierzchołek
             ])
-
-
-def draw_date_picker():
-    """Rysuj okienko wyboru daty z nawigacją lewo/prawo"""
-    # Przyciemnienie tła
-    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-    overlay.fill((0, 0, 0, 200))
-    screen.blit(overlay, (0, 0))
-
-    # Wymiary popup
-    popup_width = 800
-    header_height = 80
-    popup_height = 280 + header_height
-
-    # Pozycja po prawej stronie ekranu
-    popup_margin = 30
-    popup_x = SCREEN_WIDTH - popup_width - popup_margin
-    popup_y = (SCREEN_HEIGHT - popup_height) // 2
-
-    # Tło popup - taki sam kolor jak główny kwadrat
-    dark_blue_gray = (40, 50, 60)
-    pygame.draw.rect(screen, dark_blue_gray, (popup_x, popup_y, popup_width, popup_height))
-
-    # Dodaj liniowy gradient - algorytm jak w głównym kwadracie
-    line_spacing = 15
-    brightness_increment = 2
-    initial_line_thickness = 10
-    cycle_length = initial_line_thickness + 1
-
-    current_y = popup_y + line_spacing
-    line_index = 0
-
-    while current_y < popup_y + popup_height:
-        cyclic_index = line_index % cycle_length
-        brightness_boost = cyclic_index * brightness_increment
-        line_color = (
-            min(255, dark_blue_gray[0] + brightness_boost),
-            min(255, dark_blue_gray[1] + brightness_boost),
-            min(255, dark_blue_gray[2] + brightness_boost)
-        )
-        line_thickness = initial_line_thickness - cyclic_index
-
-        if line_thickness > 0:
-            for i in range(line_thickness):
-                pygame.draw.line(screen, line_color,
-                               (popup_x + 10, current_y + i),
-                               (popup_x + popup_width - 10, current_y + i))
-
-        current_y += line_spacing
-        line_index += 1
-
-    # Białe obramowanie wokół całego okna
-    pygame.draw.rect(screen, LIGHT_BLUE, (popup_x, popup_y, popup_width, popup_height), 3)
-
-    # Nagłówek na czarnym tle
-    pygame.draw.rect(screen, BLACK, (popup_x, popup_y, popup_width, header_height))
-
-    # Znajdź nazwę opcji - dla date picker zawsze "Ustaw datę ręcznie"
-    header_text = "USTAW DATĘ RĘCZNIE"
-
-    draw_text(header_text, menu_font, WHITE, popup_x + popup_width // 2, popup_y + header_height // 2, center=True)
-
-    # Białe obramowanie nagłówka (tylko góra, lewo, prawo - bez dołu)
-    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x + popup_width, popup_y), 3)  # Góra
-    pygame.draw.line(screen, WHITE, (popup_x, popup_y), (popup_x, popup_y + header_height), 3)  # Lewo
-    pygame.draw.line(screen, WHITE, (popup_x + popup_width, popup_y), (popup_x + popup_width, popup_y + header_height), 3)  # Prawo
-
-    # Pozycja pól
-    field_y = popup_y + header_height + 50
-    field_width = 150
-    field_height = 100
-    field_spacing = 60
-
-    # Oblicz pozycje X dla trzech pól (dzień, miesiąc, rok)
-    total_fields_width = field_width * 3 + field_spacing * 2
-    start_x = popup_x + (popup_width - total_fields_width) // 2
-
-    fields = [
-        {"value": date_picker_day, "label": "DZIEŃ", "x": start_x},
-        {"value": date_picker_month, "label": "MIESIĄC", "x": start_x + field_width + field_spacing},
-        {"value": date_picker_year, "label": "ROK", "x": start_x + (field_width + field_spacing) * 2}
-    ]
-
-    # Rysuj pola
-    for i, field in enumerate(fields):
-        is_selected = (i == date_picker_field)
-
-        # Tło pola - taki sam gradient jak w głównym menu
-        if is_selected:
-            rect_x = field["x"]
-            rect_y = field_y
-            rect_w = field_width
-            rect_h = field_height
-
-            # Kolory gradientu jak w głównym menu
-            dark_navy = (15, 30, 60)
-            light_blue = (100, 150, 255)
-
-            # Rysuj gradient - górna 1/3 z przejściem
-            gradient_height_grad = rect_h // 3
-            for y_offset in range(rect_h):
-                if y_offset < gradient_height_grad:
-                    # Gradient od jasnego do ciemnego
-                    ratio = y_offset / gradient_height_grad
-                    r = int(light_blue[0] * (1 - ratio) + dark_navy[0] * ratio)
-                    g = int(light_blue[1] * (1 - ratio) + dark_navy[1] * ratio)
-                    b = int(light_blue[2] * (1 - ratio) + dark_navy[2] * ratio)
-                    color = (r, g, b)
-                else:
-                    # Ciemno granatowy dla reszty
-                    color = dark_navy
-
-                pygame.draw.line(screen, color,
-                               (rect_x, rect_y + y_offset),
-                               (rect_x + rect_w, rect_y + y_offset))
-
-            # Białe obramowanie 5px
-            pygame.draw.rect(screen, WHITE, (rect_x, rect_y, rect_w, rect_h), 5)
-            text_color = YELLOW
-            label_color = YELLOW
-        else:
-            pygame.draw.rect(screen, (60, 60, 60), (field["x"], field_y, field_width, field_height))
-            pygame.draw.rect(screen, GRAY, (field["x"], field_y, field_width, field_height), 3)
-            text_color = WHITE
-            label_color = GRAY
-
-        # Label nad polem
-        draw_text(field["label"], font_tiny, label_color, field["x"] + field_width // 2, field_y - 30, center=True)
-
-        # Wartość
-        value_text = f"{field['value']:02d}" if i < 2 else f"{field['value']:04d}"
-        draw_text(value_text, font_large, text_color, field["x"] + field_width // 2, field_y + field_height // 2, center=True)
-
-        # Strzałki dla zaznaczonego pola
-        if is_selected:
-            # Strzałka w górę
-            arrow_up_y = field_y + 15
-            draw_text("▲", font_medium, YELLOW, field["x"] + field_width // 2, arrow_up_y, center=True)
-
-            # Strzałka w dół
-            arrow_down_y = field_y + field_height - 30
-            draw_text("▼", font_medium, YELLOW, field["x"] + field_width // 2, arrow_down_y, center=True)
 
 
 # ============================================================================
@@ -4855,6 +4228,9 @@ def start_recording():
             recording = True
             recording_start_time = time.time()
 
+            # NAPRAWIONE: Zatrzymaj monitoring audio przed rozpoczęciem nagrywania
+            stop_audio_monitoring()
+
             # Rozpocznij nagrywanie audio
             start_audio_recording(current_file)
 
@@ -4879,11 +4255,17 @@ def stop_recording():
         saved_audio_file = audio_file
 
         try:
+            # NAPRAWIONE: Najpierw zatrzymaj video encoder, potem audio (aby długości się zgadzały)
+            camera.stop_encoder()
+            print("[OK] Encoder zatrzymany")
+
             # Zatrzymaj nagrywanie audio
             stop_audio_recording()
 
-            camera.stop_encoder()
-            print("[OK] Encoder zatrzymany")
+            # NAPRAWIONE: Wznów monitoring audio po zakończeniu nagrywania
+            # Dodaj małe opóźnienie aby urządzenie audio się zwolniło
+            time.sleep(0.3)
+            start_audio_monitoring()
 
             # Przetwarzanie wideo w wątku w tle (nie blokuj głównego wątku)
             def process_video():
@@ -6523,13 +5905,8 @@ def handle_menu():
         else:
             # Zamknij menu
             close_menu()
-    elif current_state == STATE_SUBMENU:
-        close_submenu()
     elif current_state == STATE_SELECTION_POPUP:
         close_popup()
-    elif current_state == STATE_DATE_PICKER:
-        current_state = STATE_MENU
-        print("[DATE_PICKER] Anulowano")
     elif current_state == STATE_VIDEOS:
         if multi_select_mode:
             # Anuluj tryb multi-select i wyczyść zaznaczenia
@@ -6613,9 +5990,6 @@ def handle_ok():
 
     elif current_state == STATE_SELECTION_POPUP:
         popup_confirm()
-
-    elif current_state == STATE_DATE_PICKER:
-        date_picker_confirm()
 
     elif current_state == STATE_MENU:
         if not menu_editing_mode:
@@ -6719,9 +6093,6 @@ def handle_ok():
                     else:
                         print(f"[EDIT] Zakończono edycję: {tile['label']}")
 
-    elif current_state == STATE_SUBMENU:
-        submenu_ok()
-
 
 def handle_delete():
     global current_state, confirm_selection, date_editing, camera_settings, menu_value_editing, selected_tile, menu_editing_mode
@@ -6807,14 +6178,10 @@ def handle_up():
         print(f"[VOL] Głośność UP: {int(new_volume * 100)}%")
     elif current_state == STATE_MENU:
         menu_navigate_up()
-    elif current_state == STATE_SUBMENU:
-        submenu_navigate_up()
     elif current_state == STATE_VIDEO_CONTEXT_MENU:
         video_context_menu_selection = max(0, video_context_menu_selection - 1)
     elif current_state == STATE_SELECTION_POPUP:
         popup_navigate_up()
-    elif current_state == STATE_DATE_PICKER:
-        date_picker_navigate_up()
 
 
 def handle_down():
@@ -6834,14 +6201,10 @@ def handle_down():
         print(f"[VOL] Głośność DOWN: {int(new_volume * 100)}%")
     elif current_state == STATE_MENU:
         menu_navigate_down()
-    elif current_state == STATE_SUBMENU:
-        submenu_navigate_down()
     elif current_state == STATE_VIDEO_CONTEXT_MENU:
         video_context_menu_selection = min(1, video_context_menu_selection + 1)
     elif current_state == STATE_SELECTION_POPUP:
         popup_navigate_down()
-    elif current_state == STATE_DATE_PICKER:
-        date_picker_navigate_down()
 
 
 def handle_left():
@@ -6890,8 +6253,6 @@ def handle_left():
             menu_navigate_left()
     elif current_state == STATE_VIDEOS:
         videos_navigate_left()
-    elif current_state == STATE_DATE_PICKER:
-        date_picker_navigate_left()
 
 
 def handle_right():
@@ -6940,8 +6301,6 @@ def handle_right():
             menu_navigate_right()
     elif current_state == STATE_VIDEOS:
         videos_navigate_right()
-    elif current_state == STATE_DATE_PICKER:
-        date_picker_navigate_right()
 
 
 def handle_zoom_in():
@@ -7260,20 +6619,11 @@ if __name__ == '__main__':
                     adjust_zoom(-ZOOM_STEP)
                     last_zoom_time = current_time
 
-            if current_state == STATE_SUBMENU:
-                if is_button_pressed('UP') and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
-                    submenu_navigate_up()
-                    last_menu_scroll = current_time
-
-                if is_button_pressed('DOWN') and current_time - last_menu_scroll >= MENU_SCROLL_DELAY:
-                    submenu_navigate_down()
-                    last_menu_scroll = current_time
-
             # STATE_VIDEOS: Nawigacja obsługiwana przez handle_up/down poprzez check_matrix_buttons()
             # Usunięto ciągłe sprawdzanie is_button_pressed dla STATE_VIDEOS aby uniknąć duplikacji
-            
+
             frame = None
-            if current_state in [STATE_MAIN, STATE_MENU, STATE_SUBMENU]:
+            if current_state in [STATE_MAIN, STATE_MENU]:
                 try:
                     frame = camera.capture_array()
                 except:
@@ -7291,15 +6641,9 @@ if __name__ == '__main__':
             elif current_state == STATE_MENU:
                 draw_menu_tiles(frame)
                 draw_menu_bottom_buttons()  # Przyciski na wierzchu (wysoki z-index)
-            elif current_state == STATE_SUBMENU:
-                draw_submenu_screen(frame)
             elif current_state == STATE_SELECTION_POPUP:
                 draw_menu_tiles(frame)
                 draw_selection_popup()
-                draw_menu_bottom_buttons()  # Przyciski na wierzchu (wysoki z-index)
-            elif current_state == STATE_DATE_PICKER:
-                draw_menu_tiles(frame)
-                draw_date_picker()
                 draw_menu_bottom_buttons()  # Przyciski na wierzchu (wysoki z-index)
             elif current_state == STATE_VIDEO_CONTEXT_MENU:
                 draw_videos_screen(hide_buttons=True)
