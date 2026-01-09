@@ -49,13 +49,13 @@ IR_CUT_A = 24  # Pełen dzień (IR filtr ON)
 IR_CUT_B = 25  # Noc (IR filtr OFF)
 IR_LED = 12    # Latarka IR (GPIO 12 = fizyczny pin 32)
 
-# Mapowanie przycisków w matrycy [row][col]
+# Mapowanie przycisków w matrycy 
 # Układ:
-#       C0   C1   C2   C3
-# R0 [ MENU ][ + ][ - ][UP]
-# R1 [    ][RIGHT ][OK][LEFT ]
-# R2 [    ][VID][DEL ][DOWN ]
-# R3 [ ][   ][    ][REC  ]
+#      
+#  [ - ][ - ][REC][ - ]
+#  [MINUS][UP][PLUS][MENU]
+#  [LEFT][OK][RIGHT][VIDEOS]
+#  [IR][DOWN][  - ][DELETE]
 
 BUTTON_MAP = {
     (3, 1): 'RIGHT',      # R3, C1
@@ -1198,11 +1198,11 @@ def merge_audio_video(video_path, audio_path):
         # Plik tymczasowy dla video z audio (lokalny dysk, nie karta SD)
         temp_output = THUMBNAIL_DIR / f"temp_merged_{video_path.name}"
 
-        # NAPRAWIONE: Użyj ffmpeg z precyzyjną synchronizacją audio-video
+        # Użyj ffmpeg z precyzyjną synchronizacją audio-video
         cmd = [
             "ffmpeg",
             "-i", str(video_path),              # Wejście video
-            "-itsoffset", "0.0",                # KLUCZOWE: Ustaw offset audio na dokładnie 0
+            "-itsoffset", "0.0",                # Ustaw offset audio na dokładnie 0
             "-i", str(audio_path),              # Wejście audio
             "-map", "0:v:0",                    # Mapuj pierwszy strumień video z pierwszego pliku
             "-map", "1:a:0",                    # Mapuj pierwszy strumień audio z drugiego pliku
@@ -1212,7 +1212,7 @@ def merge_audio_video(video_path, audio_path):
             "-ar", "48000",                     # Wymuś częstotliwość 48kHz na wyjściu
             "-vsync", "cfr",                    # Constant Frame Rate dla video
             "-af", "aresample=async=1:first_pts=0",  # Precyzyjna resampling z synchronizacją od 0
-            "-avoid_negative_ts", "make_zero",  # KLUCZOWE: Upewnij się że timestampy startują od 0
+            "-avoid_negative_ts", "make_zero",  # Upewnij się że timestampy startują od 0
             "-fflags", "+genpts",               # Generuj presentation timestamps
             # USUNIĘTO -shortest: Zachowaj pełną długość wideo, nawet jeśli audio jest krótsze
             "-y",
@@ -1604,15 +1604,15 @@ def toggle_ir_cut():
     global ir_mode_day, camera_settings
 
     if ir_mode_day:
-        # POPRAWIONA LOGIKA: Tryb nocny = filtr IR wyłączony (odwrotnie niż było)
+        # Tryb nocny = filtr IR wyłączony 
         print("[IR] Przełączanie: Tryb NOCNY (Filtr IR OFF)")
-        GPIO.output(IR_CUT_A, GPIO.LOW)  # Odwrócone
-        GPIO.output(IR_CUT_B, GPIO.HIGH)  # Odwrócone
+        GPIO.output(IR_CUT_A, GPIO.LOW)  
+        GPIO.output(IR_CUT_B, GPIO.HIGH)  
     else:
-        # POPRAWIONA LOGIKA: Tryb dzienny = filtr IR włączony (odwrotnie niż było)
+        # Tryb dzienny = filtr IR włączony 
         print("[IR] Przełączanie: Tryb DZIEŃ (Filtr IR ON)")
-        GPIO.output(IR_CUT_A, GPIO.HIGH)  # Odwrócone
-        GPIO.output(IR_CUT_B, GPIO.LOW)   # Odwrócone
+        GPIO.output(IR_CUT_A, GPIO.HIGH)  
+        GPIO.output(IR_CUT_B, GPIO.LOW)  
 
     # Krótki impuls wystarczy do przełączenia mechanicznego filtra
     time.sleep(0.1)
@@ -1625,18 +1625,14 @@ def toggle_ir_cut():
 
     # Automatyczne włączenie/wyłączenie Night Vision i latarki IR
     if not ir_mode_day:
-        # Filtr IR wyłączony (noc) - włącz Night Vision i latarkę IR
+        # Filtr IR wyłączony  - włącz Night Vision i latarkę IR
         camera_settings["night_vision_mode"] = True
         GPIO.output(IR_LED, GPIO.HIGH)  # HIGH włącza latarkę IR
-        print("[NIGHT VISION] Automatycznie włączony")
-        print("[IR LED] Latarka IR włączona (HIGH)")
         apply_camera_settings()
     else:
-        # Filtr IR włączony (dzień) - wyłącz Night Vision i latarkę IR
+        # Filtr IR włączony  - wyłącz Night Vision i latarkę IR
         camera_settings["night_vision_mode"] = False
         GPIO.output(IR_LED, GPIO.LOW)  # LOW wyłącza latarkę IR
-        print("[NIGHT VISION] Automatycznie wyłączony")
-        print("[IR LED] Latarka IR wyłączona (LOW)")
         apply_camera_settings()
 
     # Zapisz stan filtra IR do pliku JSON
@@ -1774,7 +1770,7 @@ def add_date_overlay_to_video(video_path):
         
         print(f"[VIDEO] Filtr: {drawtext_filter}")
         
-        # Komenda ffmpeg - NAPRAWIONE: kopiuj wszystkie klatki bez dropping
+        # Komenda ffmpeg 
         cmd = [
             "ffmpeg",
             "-i", str(video_path),
