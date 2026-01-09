@@ -1004,7 +1004,7 @@ def audio_monitoring_loop():
 
 
 def start_audio_monitoring():
-    """NOWY: Uruchom ciągły monitoring poziomu audio"""
+    """Uruchom ciągły monitoring poziomu audio"""
     global audio_monitoring_active, audio_monitoring_thread
 
     if not audio or audio_device_index is None:
