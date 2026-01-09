@@ -193,9 +193,7 @@ menu_font = None
 font_70 = None
 SCREEN_WIDTH = 0
 SCREEN_HEIGHT = 0
-playback_icon = None  # Obrazek ikony playback
 steadyhand_icon = None  # Obrazek ikony steadyhand
-sd_icon = None  # Obrazek ikony karty SD
 brightness_icon = None  # Obrazek ikony brightness
 film_icon = None  # Obrazek ikony filmu
 pause_icon = None  # Obrazek ikony pauzy
@@ -248,10 +246,10 @@ camera_settings = {
     "zoom": 0.0,
     "show_grid": True,
     "font_family": "HomeVideo",
-    "audio_recording": True,  # NOWY: Włącz/wyłącz nagrywanie dźwięku
-    "show_center_frame": True,  # NOWY: Pokaż ramkę środkową
-    "night_vision_mode": False,  # NOWY: Tryb Night Vision (automatyczny dla IR)
-    "ir_filter_day_mode": True,  # NOWY: Stan filtra IR (True = dzień, False = noc)
+    "audio_recording": True,  
+    "show_center_frame": True,  
+    "night_vision_mode": False,  
+    "ir_filter_day_mode": True,  
 }
 
 # Opcje
@@ -3497,34 +3495,6 @@ def draw_error_message():
     screen.blit(text_surface, (text_x, text_y))
 
 
-def draw_sd_indicator():
-    """Rysuj spixelizowaną ikonę karty SD poniżej REC/STBY"""
-    # Ukryj ikonę SD podczas nagrywania
-    if recording:
-        return
-
-    if sd_icon is None:
-        return
-
-    right_margin = 10
-    rec_y = 75  # Pozycja REC/STBY
-    sd_y = rec_y + 30  # 30px poniżej REC/STBY
-
-    # NAJPIERW spixelizuj oryginalną ikonę
-    pixelized_icon = pixelize_image(sd_icon, pixel_size=4)
-
-    # POTEM przeskaluj spixelizowaną ikonę do żądanego rozmiaru
-    scaled_size = 90
-    final_icon = pygame.transform.scale(sd_icon, (scaled_size + 20, scaled_size))
-
-    # Wyrównaj do prawej krawędzi
-    sd_width = final_icon.get_width()
-    sd_x = SCREEN_WIDTH - right_margin - sd_width
-
-    # Rysuj ikonę
-    screen.blit(final_icon, (sd_x, sd_y))
-
-
 def draw_menu_button():
     """Rysuj przycisk P-MENU w lewym dolnym rogu"""
     button_width = 220
@@ -3948,41 +3918,11 @@ def load_fonts():
         font_70 = pygame.font.Font(None, 70)
 
 
-def pixelize_image(image, pixel_size=4):
-    """Spixelizuj obrazek poprzez skalowanie w dół i w górę"""
-    if image is None:
-        return None
-
-    # Pobierz aktualne wymiary
-    width, height = image.get_size()
-
-    # Oblicz nowe wymiary (podziel przez pixel_size)
-    small_width = max(1, width // pixel_size)
-    small_height = max(1, height // pixel_size)
-
-    # Skaluj w dół (zmniejsz)
-    small_image = pygame.transform.scale(image, (small_width, small_height))
-
-    # Skaluj z powrotem do oryginalnego rozmiaru (powiększ) - efekt pikseli
-    pixelized = pygame.transform.scale(small_image, (width, height))
-
-    return pixelized
-
-
 def load_images():
     """Załaduj obrazki interfejsu"""
-    global playback_icon, steadyhand_icon, sd_icon, brightness_icon, film_icon, pause_icon
+    global steadyhand_icon, brightness_icon, film_icon, pause_icon
 
     try:
-        # Załaduj ikonę playback
-        playback_path = Path(__file__).parent /"icons"/ "playback.png"
-        if playback_path.exists():
-            playback_icon = pygame.image.load(str(playback_path))
-            print("[OK] Ikona playback załadowana")
-        else:
-            print(f"[WARN] Nie znaleziono pliku: {playback_path}")
-            playback_icon = None
-
         # Załaduj ikonę steadyhand
         steadyhand_path = Path(__file__).parent /"icons"/ "steadyhand.png"
         if steadyhand_path.exists():
@@ -3991,15 +3931,6 @@ def load_images():
         else:
             print(f"[WARN] Nie znaleziono pliku: {steadyhand_path}")
             steadyhand_icon = None
-
-        # Załaduj ikonę SD
-        sd_path = Path(__file__).parent /"icons"/ "sd.png"
-        if sd_path.exists():
-            sd_icon = pygame.image.load(str(sd_path))
-            print("[OK] Ikona SD załadowana")
-        else:
-            print(f"[WARN] Nie znaleziono pliku: {sd_path}")
-            sd_icon = None
 
         # Załaduj ikonę brightness
         brightness_path = Path(__file__).parent /"icons"/ "bright.png"
@@ -4029,9 +3960,7 @@ def load_images():
             pause_icon = None
     except Exception as e:
         print(f"[ERROR] Błąd wczytywania obrazków: {e}")
-        playback_icon = None
         steadyhand_icon = None
-        sd_icon = None
         brightness_icon = None
         pause_icon = None
 
