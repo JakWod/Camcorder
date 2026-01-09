@@ -1388,7 +1388,8 @@ def reset_to_factory():
         "show_grid": True,
     }
     save_config()
-    apply_camera_settings()
+    # NAPRAWIONE: Rekonfiguruj kamerę przy zmianie rozdzielczości
+    reconfigure_camera_resolution()
     print("[OK] Reset do ustawień fabrycznych")
 
 
@@ -1396,7 +1397,8 @@ def reset_quality_settings():
     """Reset ustawień jakości"""
     camera_settings["video_resolution"] = "1080p30"
     save_config()
-    apply_camera_settings()
+    # NAPRAWIONE: Rekonfiguruj kamerę przy zmianie rozdzielczości
+    reconfigure_camera_resolution()
     print("[OK] Reset ustawień jakości")
 
 
@@ -1522,6 +1524,47 @@ def apply_camera_settings():
 
     except Exception as e:
         print(f"[WARN] Błąd ustawiania kamery: {e}")
+
+
+def reconfigure_camera_resolution():
+    """Rekonfiguruj kamerę z nową rozdzielczością"""
+    global camera
+    if not camera:
+        return
+
+    try:
+        # Jeśli trwa nagrywanie, nie zmieniaj rozdzielczości
+        if recording:
+            print("[WARN] Nie można zmienić rozdzielczości podczas nagrywania")
+            return
+
+        resolution = camera_settings.get("video_resolution", "1080p30")
+        res_config = RESOLUTION_MAP[resolution]
+
+        print(f"[CAMERA] Rekonfiguracja na {resolution}...")
+
+        # Zatrzymaj kamerę
+        camera.stop()
+
+        # Utwórz nową konfigurację
+        config = camera.create_video_configuration(
+            main={"size": res_config["size"], "format": "RGB888"},
+            controls={"FrameRate": res_config["fps"]}
+        )
+
+        # Zastosuj nową konfigurację
+        camera.configure(config)
+        camera.start()
+
+        # Ponownie zastosuj ustawienia kamery (jasność, kontrast, itp.)
+        apply_camera_settings()
+
+        print(f"[OK] Kamera zrekonfigurowana na {resolution}")
+
+    except Exception as e:
+        print(f"[ERROR] Błąd rekonfiguracji kamery: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def apply_zoom(zoom_level):
@@ -2179,6 +2222,9 @@ def popup_confirm():
         # Specjalne akcje dla niektórych opcji
         if popup_tile_id == "font_family":
             load_fonts()
+        elif popup_tile_id == "video_resolution":
+            # NAPRAWIONE: Rekonfiguruj kamerę przy zmianie rozdzielczości
+            reconfigure_camera_resolution()
         elif popup_tile_id in ["brightness", "contrast", "saturation", "sharpness", "exposure_compensation", "awb_mode"]:
             apply_camera_settings()
 
