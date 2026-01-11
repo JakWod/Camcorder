@@ -245,7 +245,7 @@ camera_settings = {
     "date_font_size": "medium",
     "zoom": 0.0,
     "show_grid": True,
-    "font_family": "HomeVideo",
+    "font_family": "DigitalPixel2",
     "audio_recording": True,  
     "show_center_frame": True,  
     "night_vision_mode": False,  
@@ -4336,7 +4336,7 @@ def start_video_playback(video_path):
     """Rozpocznij odtwarzanie - FPS z nazwy pliku, ograniczenie 50fps do 30fps"""
     global video_capture, video_current_frame, video_total_frames, video_fps
     global video_path_playing, video_paused, current_state, video_last_frame_time, video_last_surface
-    global video_audio_ready, playback_loading_start_time, last_ui_interaction_time  # NOWY: Flaga gotowości audio
+    global video_audio_ready, playback_loading_start_time, last_ui_interaction_time  
 
     # Sprawdź czy film jest w trakcie przetwarzania
     processing_marker = video_path.with_suffix('.processing')
@@ -5494,14 +5494,14 @@ def draw_playing_screen():
         frames_to_advance = int(elapsed / frame_interval)
 
         if frames_to_advance > 0:
-            for _ in range(frames_to_advance):
+            for i in range(frames_to_advance):
                 ret, frame = video_capture.read()
 
                 if not ret or frame is None:
                     stop_video_playback()
                     return
 
-                if _ == frames_to_advance - 1:  # Tylko ostatnią klatkę rysujemy
+                if i == frames_to_advance - 1:  # Rysujemy tylko ostatnią klatkę
                     try:
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
